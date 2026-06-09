@@ -155,14 +155,16 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
             setSubMode(false);
             return;
           }
-          // Shift+H — toggle habit mode for the about-to-be-created task
-          if (allowHabit && e.shiftKey && (e.key === "H" || e.key === "h")) {
+          // Option/Alt + H — toggle habit mode for the about-to-be-created task.
+          // Using e.code (physical key) so the Mac dead-key (˙) doesn't fool us.
+          // Plain Shift+H caused collisions when typing words like "Heartland".
+          if (allowHabit && e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyH") {
             e.preventDefault();
             setHabit(h => !h);
             return;
           }
-          // Shift+N — flag the task so its note field auto-opens after commit
-          if (allowNote && e.shiftKey && (e.key === "N" || e.key === "n")) {
+          // Option/Alt + N — flag the task so its note field auto-opens after commit
+          if (allowNote && e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyN") {
             e.preventDefault();
             setNote(n => !n);
             return;
@@ -176,8 +178,8 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
           <span>↵ add</span>
           {chainOnEnter && <span>· stays open</span>}
           {allowTab    && <span>· ⇥ subtask</span>}
-          {allowHabit  && <span>· ⇧H habit</span>}
-          {allowNote   && <span>· ⇧N note</span>}
+          {allowHabit  && <span>· ⌥H habit</span>}
+          {allowNote   && <span>· ⌥N note</span>}
           <span>· esc close</span>
         </div>
       )}

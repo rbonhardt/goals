@@ -46,7 +46,7 @@ function HabitDays({ task, accent }) {
   );
 }
 
-function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
+function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(task.subtasks.length > 0);
@@ -79,8 +79,9 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
   }
 
   const isHabit = task.type === "habit";
+  const dropClass = dropMode ? " drop-" + dropMode : "";
   return (
-    <div className={"task lane-" + lane + " status-" + task.status + (isHabit ? " is-habit" : "")} data-row data-task-id={task.id}
+    <div className={"task lane-" + lane + " status-" + task.status + (isHabit ? " is-habit" : "") + dropClass} data-row data-task-id={task.id}
       draggable onDragStart={startDrag}
       onDragEnd={() => { window.DRAG = { taskId: null }; }}>
       <div className="task-main">
@@ -154,25 +155,93 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
 }
 
 function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
-  const { dispatch } = window.useFocusStore();
-  const [over, setOver] = React.useState(false);
+  const { state, dispatch } = window.useFocusStore();
+  // drop : null | { type: "between", index } | { type: "into", taskId } | { type: "lane" }
+  // - "between": insertion line between two rows; index = position to insert at
+  // - "into":    drop highlights a target row; dragged becomes its subtask
+  // - "lane":    lane is empty / dropped below all rows → append to lane
+  const [drop, setDrop] = React.useState(null);
   const ref = React.useRef(null);
 
+  function computeDrop(e) {
+    const d = window.DRAG;
+    if (!d || !d.taskId) return null;
+    const rows = [...ref.current.querySelectorAll(":scope > [data-row]")];
+    // Iterate task rows looking for the one under cursor
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (e.clientY < r.top) continue;
+      if (e.clientY > r.bottom) continue;
+      const rowTaskId = rows[i].dataset.taskId;
+      const rel = (e.clientY - r.top) / r.height;
+      // dragging a task onto itself disables nest-into, just bail (no preview)
+      if (rowTaskId === d.taskId) {
+        if (rel < 0.5) return { type: "between", index: i };
+        return { type: "between", index: i + 1 };
+      }
+      // Empty lane placeholder rows don't have a taskId
+      if (!rowTaskId) return { type: "between", index: i };
+      // Top 30% / bottom 30% drop between rows; middle 40% nests
+      if (rel < 0.3) return { type: "between", index: i };
+      if (rel > 0.7) return { type: "between", index: i + 1 };
+      return { type: "into", taskId: rowTaskId };
+    }
+    // Below all rows
+    return { type: "between", index: rows.length };
+  }
+
+  function onDragOver(e) {
+    if (!window.DRAG || !window.DRAG.taskId) return;
+    e.preventDefault();
+    setDrop(computeDrop(e));
+  }
+
   function onDrop(e) {
-    e.preventDefault(); setOver(false);
-    const d = window.DRAG; if (!d || !d.taskId) return;
-    const idx = window.computeDropIndex(ref.current, e.clientY);
-    dispatch({ type: "MOVE_TASK", taskId: d.taskId, toProject: project.id, toLane: lane, toIndex: idx });
+    e.preventDefault();
+    const d = window.DRAG;
+    const current = drop || computeDrop(e);
+    setDrop(null);
+    if (!d || !d.taskId || !current) { window.DRAG = { taskId: null }; return; }
+
+    if (current.type === "into" && current.taskId && current.taskId !== d.taskId) {
+      // Nest the dragged task as a subtask under the target.
+      // Note: subtasks are a flatter shape than tasks (id/text/done only) —
+      // dragging a complex task in here drops its note/status/subtasks.
+      let draggedText = null;
+      for (const p of state.projects) {
+        for (const t of p.tasks) if (t.id === d.taskId) { draggedText = t.text; break; }
+        if (draggedText) break;
+      }
+      if (draggedText) {
+        dispatch({ type: "ADD_SUB", taskId: current.taskId, text: draggedText });
+        dispatch({ type: "DELETE_TASK", taskId: d.taskId });
+      }
+    } else if (current.type === "between") {
+      dispatch({ type: "MOVE_TASK", taskId: d.taskId, toProject: project.id, toLane: lane, toIndex: current.index });
+    }
     window.DRAG = { taskId: null };
   }
+
+  // Pre-compute the dropMode for each row so TaskRow can render the indicator
+  // without recomputing positions itself.
+  const dropForIndex = (i) => {
+    if (!drop) return null;
+    if (drop.type === "into" && tasks[i] && drop.taskId === tasks[i].id) return "into";
+    if (drop.type === "between") {
+      if (drop.index === i) return "before";
+      if (drop.index === tasks.length && i === tasks.length - 1) return "after";
+    }
+    return null;
+  };
+
   return (
     <div ref={ref}
-      className={"lane" + (over ? " lane-over" : "")}
-      onDragOver={(e) => { if (window.DRAG && window.DRAG.taskId) { e.preventDefault(); setOver(true); } }}
-      onDragLeave={(e) => { if (!ref.current.contains(e.relatedTarget)) setOver(false); }}
+      className={"lane" + (drop ? " lane-over" : "")}
+      onDragOver={onDragOver}
+      onDragLeave={(e) => { if (!ref.current.contains(e.relatedTarget)) setDrop(null); }}
       onDrop={onDrop}>
-      {tasks.map(t => <TaskRow key={t.id} task={t} project={project} lane={lane}
-        openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} />)}
+      {tasks.map((t, i) => <TaskRow key={t.id} task={t} project={project} lane={lane}
+        openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} dropMode={dropForIndex(i)} />)}
       {tasks.length === 0 && <div className="lane-empty" data-row>{lane === "queue" ? "Queue is empty" : "Drop a task here"}</div>}
       {children}
     </div>

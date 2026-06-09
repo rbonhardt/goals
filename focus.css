@@ -177,7 +177,27 @@ button { font-family: inherit; }
 .lane-over { background: oklch(0.93 0.03 70 / .6); outline: 1px dashed var(--line-2); }
 .lane-empty { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--ink-3); padding: 10px 8px; text-align: center; }
 
-.task { border-radius: 10px; padding: 9px 8px; transition: background .15s; }
+.task { border-radius: 10px; padding: 9px 8px; transition: background .15s; position: relative; }
+
+/* drag-and-drop targets — insertion line above/below + nest highlight */
+.task.drop-before::before {
+  content: ""; position: absolute; top: -3px; left: 4px; right: 8px; height: 3px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.task.drop-after::after {
+  content: ""; position: absolute; bottom: -3px; left: 4px; right: 8px; height: 3px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.task.drop-into {
+  background: oklch(0.94 0.04 70 / 0.85);
+  box-shadow: 0 0 0 2px var(--clay) inset;
+}
+.task.drop-into::after {
+  content: "↳ nest as subtask"; position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--clay); background: var(--paper); padding: 3px 8px; border-radius: 999px;
+  pointer-events: none;
+}
 .task[draggable] { cursor: default; }
 .task:hover { background: var(--paper-2); }
 .task.status-doing { background: var(--amber-bg); box-shadow: inset 3px 0 0 var(--amber-line); }
