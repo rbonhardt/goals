@@ -441,6 +441,7 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
   background: var(--clay); color: white; padding: 2px 7px; border-radius: 999px;
 }
 .addrow-tag.sub { background: var(--ink-2); }
+.addrow-tag.note { background: var(--gold); color: var(--ink); }
 .addrow-input.habit-mode { box-shadow: inset 0 0 0 2px oklch(0.605 0.108 42 / .35); }
 .addrow-input.sub-mode { padding-left: 18px; box-shadow: inset 3px 0 0 0 var(--ink-2); }
 

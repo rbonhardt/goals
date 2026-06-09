@@ -68,23 +68,25 @@ function InlineText({ value, onCommit, placeholder, className, style, multiline,
 //                     parent can add the task as a habit.
 //
 // onAdd receives (text, extras), where extras = { habit, asSubtask }.
-function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowTab, allowHabit }) {
+function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowTab, allowHabit, allowNote }) {
   const [open, setOpen]       = uS(false);
   const [val, setVal]         = uS("");
   const [habit, setHabit]     = uS(false);
-  const [subMode, setSubMode] = uS(false);  // set after Tab; child of last task
+  const [note, setNote]       = uS(false);   // set by Shift+N; opens note field on commit
+  const [subMode, setSubMode] = uS(false);   // set after Tab; child of last task
   const ref = uR(null);
   uE(() => { if (open && ref.current) ref.current.focus(); }, [open]);
 
-  const closeAll = () => { setVal(""); setHabit(false); setSubMode(false); setOpen(false); };
+  const closeAll = () => { setVal(""); setHabit(false); setNote(false); setSubMode(false); setOpen(false); };
 
   const commit = (extras = {}) => {
     const v = val.trim();
-    if (v) onAdd(v, { habit, asSubtask: subMode, ...extras });
+    if (v) onAdd(v, { habit, addNote: note, asSubtask: subMode, ...extras });
     setVal("");
     if (extras.keepOpen) {
-      // chain-mode: stay open, clear habit flag (it was for that one task)
+      // chain-mode: stay open, clear the per-task flags (they applied to that one task)
       setHabit(false);
+      setNote(false);
       // subMode persists across commits so you can chain subtasks under the same parent
     } else {
       closeAll();
@@ -99,10 +101,11 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
     );
   }
 
-  const hotkeyMode = chainOnEnter || allowTab || allowHabit;
+  const hotkeyMode = chainOnEnter || allowTab || allowHabit || allowNote;
   const effectivePlaceholder =
       subMode ? "Add a step…" :
       habit   ? "Habit name…" :
+      note    ? "Task (will open note after)…" :
       placeholder;
 
   return (
@@ -156,15 +159,23 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
             setHabit(h => !h);
             return;
           }
+          // Shift+N — flag the task so its note field auto-opens after commit
+          if (allowNote && e.shiftKey && (e.key === "N" || e.key === "n")) {
+            e.preventDefault();
+            setNote(n => !n);
+            return;
+          }
         }} />
       {hotkeyMode && (
         <div className="addrow-hints">
           {habit   && <span className="addrow-tag">habit</span>}
+          {note    && <span className="addrow-tag note">+ note</span>}
           {subMode && <span className="addrow-tag sub">subtask of last</span>}
           <span>↵ add</span>
           {chainOnEnter && <span>· stays open</span>}
           {allowTab    && <span>· ⇥ subtask</span>}
           {allowHabit  && <span>· ⇧H habit</span>}
+          {allowNote   && <span>· ⇧N note</span>}
           <span>· esc close</span>
         </div>
       )}

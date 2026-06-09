@@ -46,7 +46,7 @@ function HabitDays({ task, accent }) {
   );
 }
 
-function TaskRow({ task, project, lane }) {
+function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(task.subtasks.length > 0);
@@ -54,6 +54,15 @@ function TaskRow({ task, project, lane }) {
   useClickOutside(menuOpen, () => setMenuOpen(false));
   const subDone = task.subtasks.filter(s => s.done).length;
   const closeMenu = () => setMenuOpen(false);
+
+  // AddRow Shift+N signals "open the note field for the task it just created".
+  // ProjectCard sets openNoteForId; we react once, then clear it via onNoteOpened.
+  React.useEffect(() => {
+    if (openNoteForId && openNoteForId === task.id) {
+      setShowNote(true);
+      onNoteOpened && onNoteOpened();
+    }
+  }, [openNoteForId, task.id, onNoteOpened]);
 
   function startDrag(e) {
     window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
@@ -135,7 +144,7 @@ function TaskRow({ task, project, lane }) {
   );
 }
 
-function Lane({ project, lane, tasks, children }) {
+function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
   const { dispatch } = window.useFocusStore();
   const [over, setOver] = React.useState(false);
   const ref = React.useRef(null);
@@ -153,7 +162,8 @@ function Lane({ project, lane, tasks, children }) {
       onDragOver={(e) => { if (window.DRAG && window.DRAG.taskId) { e.preventDefault(); setOver(true); } }}
       onDragLeave={(e) => { if (!ref.current.contains(e.relatedTarget)) setOver(false); }}
       onDrop={onDrop}>
-      {tasks.map(t => <TaskRow key={t.id} task={t} project={project} lane={lane} />)}
+      {tasks.map(t => <TaskRow key={t.id} task={t} project={project} lane={lane}
+        openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} />)}
       {tasks.length === 0 && <div className="lane-empty" data-row>{lane === "queue" ? "Queue is empty" : "Drop a task here"}</div>}
       {children}
     </div>
@@ -170,6 +180,9 @@ function ProjectCard({ project }) {
   // subtasks (or further subtasks) to it. Reset to null whenever the project
   // changes from outside the AddRow flow.
   const [lastTaskId, setLastTaskId] = React.useState(null);
+  // Shift+N flag — set to a new task's id so the matching TaskRow auto-opens
+  // its note field; the TaskRow clears it back to null when it consumes it.
+  const [openNoteForId, setOpenNoteForId] = React.useState(null);
   const doneCount = active.filter(t => t.status === "done").length;
 
   function startCardDrag(e) {
@@ -177,9 +190,10 @@ function ProjectCard({ project }) {
     window.DRAGCARD = project.id; e.dataTransfer.effectAllowed = "move";
   }
 
-  // The task-add hotkey handler. extras: { habit, asSubtask }.
+  // The task-add hotkey handler. extras: { habit, addNote, asSubtask }.
   // - asSubtask=true and we have a lastTaskId → dispatch ADD_SUB on it
   // - otherwise add a fresh task and remember its id for the next round
+  // - addNote=true → also signal the new TaskRow to open its note field
   function handleAdd(lane, text, extras = {}) {
     if (extras.asSubtask && lastTaskId) {
       dispatch({ type: "ADD_SUB", taskId: lastTaskId, text });
@@ -195,6 +209,7 @@ function ProjectCard({ project }) {
       taskType: extras.habit ? "habit" : "todo",
     });
     setLastTaskId(id);
+    if (extras.addNote) setOpenNoteForId(id);
   }
 
   return (
@@ -228,9 +243,11 @@ function ProjectCard({ project }) {
         </div>
       </div>
 
-      <Lane project={project} lane="active" tasks={active}>
+      <Lane project={project} lane="active" tasks={active}
+        openNoteForId={openNoteForId}
+        onNoteOpened={() => setOpenNoteForId(null)}>
         <window.AddRow className="task-add" placeholder="Add a to-do…"
-          chainOnEnter allowTab allowHabit
+          chainOnEnter allowTab allowHabit allowNote
           onAdd={(t, extras) => handleAdd("active", t, extras)} />
       </Lane>
 
@@ -241,10 +258,12 @@ function ProjectCard({ project }) {
           <span className="queue-count">{queue.length}</span>
         </button>
         {project.queueOpen && (
-          <Lane project={project} lane="queue" tasks={queue}>
+          <Lane project={project} lane="queue" tasks={queue}
+            openNoteForId={openNoteForId}
+            onNoteOpened={() => setOpenNoteForId(null)}>
             <window.AddRow className="task-add" placeholder="Park something for later…"
-              chainOnEnter
-              onAdd={(t) => dispatch({ type: "ADD_TASK", projectId: project.id, text: t, lane: "queue" })} />
+              chainOnEnter allowNote
+              onAdd={(t, extras) => handleAdd("queue", t, extras)} />
           </Lane>
         )}
       </div>
