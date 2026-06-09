@@ -253,9 +253,11 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 
 /* menus */
 .ttool-menu { position: relative; }
-.menu-pop { position: absolute; right: 0; top: calc(100% + 4px); background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 28px oklch(0.4 0.02 60 / .16); padding: 5px; min-width: 150px; z-index: 30; display: none; flex-direction: column; gap: 1px; }
+/* Menu is click-toggled via JS — no :hover trigger. The ::before bridge keeps the
+   hit area continuous with the trigger so the mouse never falls through a gutter. */
+.menu-pop { position: absolute; right: 0; top: 100%; margin-top: 2px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 28px oklch(0.4 0.02 60 / .16); padding: 5px; min-width: 150px; z-index: 30; display: none; flex-direction: column; gap: 1px; }
+.menu-pop::before { content: ""; position: absolute; left: 0; right: 0; top: -10px; height: 10px; }
 .menu-pop.open { display: flex; }
-.ttool-menu:hover .menu-pop { display: flex; }
 .menu-pop button { text-align: left; background: none; border: none; padding: 8px 10px; border-radius: 6px; font-size: 13px; color: var(--ink); cursor: pointer; }
 .menu-pop button:hover { background: var(--paper-2); }
 .menu-pop button.danger { color: var(--clay); }
@@ -404,6 +406,43 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .jr-goal-mark.hit { color: oklch(0.55 0.09 142); }
 .jr-goal-mark.miss { color: var(--ink-3); }
 .jr-entry-foot { margin-top: 14px; }
+
+/* ---------------- sign-in: Google button + divider ---------------- */
+.signin-google {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 11px 18px; margin-top: 4px;
+  font-family: var(--sans); font-size: 14px; font-weight: 500; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-2); border-radius: 10px; cursor: pointer;
+  transition: background .15s, border-color .15s, transform .08s;
+}
+.signin-google:hover:not(:disabled) { background: var(--paper-2); border-color: var(--ink-3); }
+.signin-google:active:not(:disabled) { transform: translateY(1px); }
+.signin-google:disabled { opacity: .55; cursor: default; }
+.signin-google svg { flex: none; }
+
+.signin-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 8px 0;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .15em; text-transform: uppercase; color: var(--ink-3);
+}
+.signin-divider::before,
+.signin-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+/* ---------------- AddRow hotkey hints + mode tags ---------------- */
+.addrow-active { display: flex; flex-direction: column; gap: 4px; }
+.addrow-active.has-hints { padding-bottom: 2px; }
+.addrow-hints {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 2px 4px 4px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+}
+.addrow-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  background: var(--clay); color: white; padding: 2px 7px; border-radius: 999px;
+}
+.addrow-tag.sub { background: var(--ink-2); }
+.addrow-input.habit-mode { box-shadow: inset 0 0 0 2px oklch(0.605 0.108 42 / .35); }
+.addrow-input.sub-mode { padding-left: 18px; box-shadow: inset 3px 0 0 0 var(--ink-2); }
 
 /* ---------------- responsive ---------------- */
 @media (max-width: 880px) {

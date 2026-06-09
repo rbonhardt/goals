@@ -4,6 +4,18 @@
 const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Generic click-outside-to-close hook. Element must carry the `data-popmenu` attribute.
+function useClickOutside(open, onClose) {
+  React.useEffect(() => {
+    if (!open) return;
+    const handle = (e) => {
+      if (!e.target.closest("[data-popmenu]")) onClose();
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open, onClose]);
+}
+
 function HabitDays({ task, accent }) {
   const { dispatch } = window.useFocusStore();
   const hit = (task.days || []).filter(Boolean).length;
@@ -38,7 +50,10 @@ function TaskRow({ task, project, lane }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(task.subtasks.length > 0);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  useClickOutside(menuOpen, () => setMenuOpen(false));
   const subDone = task.subtasks.filter(s => s.done).length;
+  const closeMenu = () => setMenuOpen(false);
 
   function startDrag(e) {
     window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
@@ -86,7 +101,8 @@ function TaskRow({ task, project, lane }) {
                         className={"sub-text" + (s.done ? " done" : "")} />
                     </div>
                   ))}
-                  <window.AddRow className="sub-add" placeholder="Add a step…" onAdd={(t) => dispatch({ type: "ADD_SUB", taskId: task.id, text: t })} />
+                  <window.AddRow className="sub-add" placeholder="Add a step…" chainOnEnter
+                    onAdd={(t) => dispatch({ type: "ADD_SUB", taskId: task.id, text: t })} />
                 </div>
               )}
             </div>
@@ -99,17 +115,19 @@ function TaskRow({ task, project, lane }) {
               ? <button className="ttool" title="Pinned to Big Three" onClick={() => dispatch({ type: "CLEAR_BIG", taskId: task.id })} style={{ color: project.accent }}>★</button>
               : <button className="ttool ttool-faint" title="Promote to Big Three" onClick={() => dispatch({ type: "PROMOTE_NEXT", taskId: task.id })}>☆</button>
           )}
-          <div className="ttool-menu">
-            <button className="ttool ttool-faint" title="More">⋯</button>
-            <div className="menu-pop">
-              {!task.note && !showNote && <button onClick={() => setShowNote(true)}>Add note</button>}
-              <button onClick={() => dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" })}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
-              {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); }}>Add steps</button>}
-              <button onClick={() => dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }) }>
-                {lane === "active" ? "Send to queue" : "Move to active"}
-              </button>
-              <button className="danger" onClick={() => dispatch({ type: "DELETE_TASK", taskId: task.id })}>Delete</button>
-            </div>
+          <div className="ttool-menu" data-popmenu={menuOpen ? "" : null}>
+            <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}>⋯</button>
+            {menuOpen && (
+              <div className="menu-pop open">
+                {!task.note && !showNote && <button onClick={() => { setShowNote(true); closeMenu(); }}>Add note</button>}
+                <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
+                {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); closeMenu(); }}>Add steps</button>}
+                <button onClick={() => { dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }); closeMenu(); }}>
+                  {lane === "active" ? "Send to queue" : "Move to active"}
+                </button>
+                <button className="danger" onClick={() => { dispatch({ type: "DELETE_TASK", taskId: task.id }); closeMenu(); }}>Delete</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -147,11 +165,36 @@ function ProjectCard({ project }) {
   const active = window.selActive(project);
   const queue = window.selQueue(project);
   const [menuOpen, setMenuOpen] = React.useState(false);
+  useClickOutside(menuOpen, () => setMenuOpen(false));
+  // Remember the last task added via the AddRow so Tab/Enter chain can attach
+  // subtasks (or further subtasks) to it. Reset to null whenever the project
+  // changes from outside the AddRow flow.
+  const [lastTaskId, setLastTaskId] = React.useState(null);
   const doneCount = active.filter(t => t.status === "done").length;
 
   function startCardDrag(e) {
     if (e.target.closest(".task") || e.target.closest("input") || e.target.closest("textarea")) return;
     window.DRAGCARD = project.id; e.dataTransfer.effectAllowed = "move";
+  }
+
+  // The task-add hotkey handler. extras: { habit, asSubtask }.
+  // - asSubtask=true and we have a lastTaskId → dispatch ADD_SUB on it
+  // - otherwise add a fresh task and remember its id for the next round
+  function handleAdd(lane, text, extras = {}) {
+    if (extras.asSubtask && lastTaskId) {
+      dispatch({ type: "ADD_SUB", taskId: lastTaskId, text });
+      return;
+    }
+    const id = window.uid();
+    dispatch({
+      type: "ADD_TASK",
+      id,
+      projectId: project.id,
+      text,
+      lane,
+      taskType: extras.habit ? "habit" : "todo",
+    });
+    setLastTaskId(id);
   }
 
   return (
@@ -169,24 +212,26 @@ function ProjectCard({ project }) {
         <span className="pcard-swatch" style={{ background: project.accent }} />
         <window.InlineText value={project.name} onCommit={(t) => dispatch({ type: "RENAME_PROJECT", projectId: project.id, name: t })} className="pcard-name" serif placeholder="Project" />
         <span className="pcard-count">{doneCount}/{active.length}</span>
-        <div className="ttool-menu">
-          <button className="ttool ttool-faint" title="Project options" onClick={() => setMenuOpen(o => !o)}>⋯</button>
+        <div className="ttool-menu" data-popmenu={menuOpen ? "" : null}>
+          <button className="ttool ttool-faint" title="Project options" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}>⋯</button>
           {menuOpen && (
-            <div className="menu-pop open" onMouseLeave={() => setMenuOpen(false)}>
+            <div className="menu-pop open">
               <div className="menu-swatches">
                 {window.ACCENTS.map(a => (
                   <button key={a.key} className={"sw" + (project.accent === a.val ? " on" : "")} style={{ background: a.val }}
                     onClick={() => { dispatch({ type: "SET_ACCENT", projectId: project.id, accent: a.val }); }} />
                 ))}
               </div>
-              <button className="danger" onClick={() => { if (confirm("Delete project \"" + project.name + "\"?")) dispatch({ type: "DELETE_PROJECT", projectId: project.id }); }}>Delete project</button>
+              <button className="danger" onClick={() => { if (confirm("Delete project \"" + project.name + "\"?")) { dispatch({ type: "DELETE_PROJECT", projectId: project.id }); setMenuOpen(false); } }}>Delete project</button>
             </div>
           )}
         </div>
       </div>
 
       <Lane project={project} lane="active" tasks={active}>
-        <window.AddRow className="task-add" placeholder="Add a to-do…" onAdd={(t) => dispatch({ type: "ADD_TASK", projectId: project.id, text: t, lane: "active" })} />
+        <window.AddRow className="task-add" placeholder="Add a to-do…"
+          chainOnEnter allowTab allowHabit
+          onAdd={(t, extras) => handleAdd("active", t, extras)} />
       </Lane>
 
       <div className="queue-section">
@@ -197,7 +242,9 @@ function ProjectCard({ project }) {
         </button>
         {project.queueOpen && (
           <Lane project={project} lane="queue" tasks={queue}>
-            <window.AddRow className="task-add" placeholder="Park something for later…" onAdd={(t) => dispatch({ type: "ADD_TASK", projectId: project.id, text: t, lane: "queue" })} />
+            <window.AddRow className="task-add" placeholder="Park something for later…"
+              chainOnEnter
+              onAdd={(t) => dispatch({ type: "ADD_TASK", projectId: project.id, text: t, lane: "queue" })} />
           </Lane>
         )}
       </div>
