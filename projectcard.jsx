@@ -51,6 +51,10 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(task.subtasks.length > 0);
   const [menuOpen, setMenuOpen] = React.useState(false);
+  // One-shot flag: when true, the note InlineText mounts already in editing
+  // mode so the cursor lands inside it. Cleared after a render so future
+  // re-renders don't keep forcing edit mode.
+  const [autoEditNote, setAutoEditNote] = React.useState(false);
   useClickOutside(menuOpen, () => setMenuOpen(false));
   const subDone = task.subtasks.filter(s => s.done).length;
   const closeMenu = () => setMenuOpen(false);
@@ -60,9 +64,13 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
   React.useEffect(() => {
     if (openNoteForId && openNoteForId === task.id) {
       setShowNote(true);
+      setAutoEditNote(true);
       onNoteOpened && onNoteOpened();
     }
   }, [openNoteForId, task.id, onNoteOpened]);
+
+  // Consume the one-shot flag after it has been passed into InlineText.
+  React.useEffect(() => { if (autoEditNote) setAutoEditNote(false); }, [autoEditNote]);
 
   function startDrag(e) {
     window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
@@ -90,7 +98,8 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened }) {
 
           {showNote || task.note ? (
             <window.InlineText value={task.note} onCommit={(t) => { dispatch({ type: "EDIT_TASK_NOTE", taskId: task.id, note: t }); if (!t) setShowNote(false); }}
-              className="task-note" placeholder="Add a note…" serif multiline />
+              className="task-note" placeholder="Add a note…" serif multiline
+              defaultEditing={autoEditNote} />
           ) : null}
 
           {isHabit && <HabitDays task={task} accent={project.accent} />}

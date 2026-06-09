@@ -22,8 +22,10 @@ function StatusToggle({ status, onCycle, size = 18 }) {
 
 // InlineText — click to edit a single line; blur/Enter commits.
 // On multiline (notes, affirmations): plain Enter SUBMITS; Shift+Enter inserts a newline.
-function InlineText({ value, onCommit, placeholder, className, style, multiline, serif }) {
-  const [editing, setEditing] = uS(false);
+// defaultEditing: starts in editing mode and immediately focuses (used by Shift+N
+// to drop the cursor right into a new task's note field).
+function InlineText({ value, onCommit, placeholder, className, style, multiline, serif, defaultEditing }) {
+  const [editing, setEditing] = uS(!!defaultEditing);
   const [draft, setDraft] = uS(value);
   const ref = uR(null);
   uE(() => { setDraft(value); }, [value]);
