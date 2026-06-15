@@ -270,15 +270,19 @@ function reducer(state, action) {
         if (t.status === "done") {
           const habitInfo = t.type === "habit" ? ` (${t.days.filter(Boolean).length}/7 days)` : "";
           completed.push({ project: p.name, accent: p.accent, text: t.text + habitInfo });
+        } else if (Array.isArray(t.subtasks)) {
+          t.subtasks.forEach(s => {
+            if (s.done) completed.push({ project: p.name, accent: p.accent, text: s.text, parent: t.text });
+          });
         }
       }));
       const entry = { n: state.week.n, range: fmtRange(state.week.startISO), completed, journal: A.journal || "", savedAt: Date.now() };
-      // remove finished one-off tasks; KEEP habits (reset for the new week); carry the rest (keep big)
+      // remove finished one-off tasks; KEEP habits (reset for the new week); carry the rest, dropping any subtasks already checked off
       const projects = state.projects.map(p => ({ ...p, tasks: p.tasks
         .filter(t => t.type === "habit" || t.status !== "done")
         .map(t => t.type === "habit"
           ? { ...t, days: [false,false,false,false,false,false,false], status: "todo" }
-          : t)
+          : { ...t, subtasks: Array.isArray(t.subtasks) ? t.subtasks.filter(s => !s.done) : t.subtasks })
       }));
       return { ...state, history: [entry, ...state.history], projects, week: { n: state.week.n + 1, startISO: addDaysISO(state.week.startISO, 7) } };
     }

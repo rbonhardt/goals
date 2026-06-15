@@ -12,7 +12,13 @@ function CloseWeek({ onClose }) {
   const [planErr, setPlanErr] = React.useState(false);
 
   const completed = [];
-  state.projects.forEach(p => p.tasks.forEach(t => { if (t.status === "done") completed.push({ project: p.name, accent: p.accent, text: t.text + (t.type === "habit" ? ` (${t.days.filter(Boolean).length}/7 days)` : "") }); }));
+  state.projects.forEach(p => p.tasks.forEach(t => {
+    if (t.status === "done") {
+      completed.push({ project: p.name, accent: p.accent, text: t.text + (t.type === "habit" ? ` (${t.days.filter(Boolean).length}/7 days)` : "") });
+    } else if (Array.isArray(t.subtasks)) {
+      t.subtasks.forEach(s => { if (s.done) completed.push({ project: p.name, accent: p.accent, text: s.text, parent: t.text }); });
+    }
+  }));
   const carry = [];
   state.projects.forEach(p => p.tasks.forEach(t => { if (t.lane === "active" && t.type !== "habit" && t.status !== "done") carry.push(t); }));
 
@@ -54,10 +60,10 @@ function CloseWeek({ onClose }) {
               <div className="cw-section-label"><span className="eyebrow">Completed this week</span><span className="cw-tally">{completed.length}</span></div>
               {completed.length === 0 && <p className="cw-none">Nothing checked off yet — that's okay.</p>}
               <div className="cw-list">
-                {completed.map((c, i) => (
+                {window.bundleCompleted(completed).map((c, i) => (
                   <div className="cw-win" key={i}>
                     <span className="cw-check">✓</span>
-                    <span className="cw-win-text">{c.text}</span>
+                    <span className="cw-win-text">{c.text}{c.subCount ? <span className="cw-win-parent"> · {c.subCount} subtask{c.subCount > 1 ? "s" : ""}</span> : null}</span>
                     <span className="cw-win-proj" style={{ color: c.accent }}>{c.project}</span>
                   </div>
                 ))}
@@ -107,8 +113,8 @@ function CloseWeek({ onClose }) {
                 </div>
                 {h.journal && <p className="cw-past-journal">{h.journal}</p>}
                 <div className="cw-past-list">
-                  {h.completed.map((c, j) => (
-                    <div className="cw-past-item" key={j}><span className="cw-dot" style={{ background: c.accent }} />{c.text}<span className="cw-past-proj">{c.project}</span></div>
+                  {window.bundleCompleted(h.completed).map((c, j) => (
+                    <div className="cw-past-item" key={j}><span className="cw-dot" style={{ background: c.accent }} />{c.text}{c.subCount ? <span className="cw-win-parent"> · {c.subCount} subtask{c.subCount > 1 ? "s" : ""}</span> : null}<span className="cw-past-proj">{c.project}</span></div>
                   ))}
                 </div>
               </div>

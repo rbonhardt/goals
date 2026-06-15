@@ -16,7 +16,7 @@ function weekToMd(h) {
   if (h.journal) s += `\n\n**Big Wins (ESP):**\n${h.journal}`;
   if (h.completed && h.completed.length) {
     s += `\n\n**Completed (${h.completed.length}):**`;
-    h.completed.forEach(c => { s += `\n- ${c.text} _[${c.project}]_`; });
+    h.completed.forEach(c => { s += `\n- ${c.text}${c.parent ? ` _(under ${c.parent})_` : ""} _[${c.project}]_`; });
   }
   return s.trim();
 }
@@ -125,8 +125,8 @@ function WeekEntry({ h }) {
       {h.journal && <p className="jr-journal">{h.journal}</p>}
       {h.completed.length > 0 && (
         <div className="jr-list">
-          {h.completed.map((c, j) => (
-            <div className="jr-item" key={j}><span className="cw-dot" style={{ background: c.accent }} />{c.text}<span className="jr-item-proj">{c.project}</span></div>
+          {window.bundleCompleted(h.completed).map((c, j) => (
+            <div className="jr-item" key={j}><span className="cw-dot" style={{ background: c.accent }} />{c.text}{c.subCount ? <span className="cw-win-parent"> · {c.subCount} subtask{c.subCount > 1 ? "s" : ""}</span> : null}<span className="jr-item-proj">{c.project}</span></div>
           ))}
         </div>
       )}

@@ -6,6 +6,21 @@ const { useState: uS, useRef: uR, useEffect: uE } = React;
 // ---- drag state (module-level, shared across cards) ----
 window.DRAG = { taskId: null, fromProject: null, fromLane: null };
 
+// Roll completed subtasks up under their parent for compact card views.
+// Standalone rows pass through; rows with `parent` collapse to one row per (project, parent) with a subCount.
+window.bundleCompleted = function (rows) {
+  const out = [];
+  const groups = new Map();
+  (rows || []).forEach(c => {
+    if (!c.parent) { out.push(c); return; }
+    const key = c.project + "::" + c.parent;
+    let g = groups.get(key);
+    if (!g) { g = { text: c.parent, project: c.project, accent: c.accent, subCount: 0 }; groups.set(key, g); out.push(g); }
+    g.subCount++;
+  });
+  return out;
+};
+
 // StatusToggle — 3-state: todo (ring) -> doing (half amber) -> done (filled)
 function StatusToggle({ status, onCycle, size = 18 }) {
   const title = status === "todo" ? "To do — click for In progress"
