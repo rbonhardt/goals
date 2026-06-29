@@ -93,6 +93,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
           <div className="task-textline">
             {task.big && lane === "active" && <span className="task-bigbadge" style={{ background: project.accent }}>{task.big}</span>}
             {isHabit && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }}>habit</span>}
+            {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
               className={"task-text st-text-" + task.status} placeholder="Task…" />
           </div>
@@ -140,6 +141,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
               <div className="menu-pop open">
                 {!task.note && !showNote && <button onClick={() => { setShowNote(true); closeMenu(); }}>Add note</button>}
                 <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
+                <button onClick={() => { dispatch({ type: "TOGGLE_RECURRING", taskId: task.id }); closeMenu(); }}>{task.recurring ? "Don’t repeat weekly" : "Repeat weekly"}</button>
                 {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); closeMenu(); }}>Add steps</button>}
                 <button onClick={() => { dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }); closeMenu(); }}>
                   {lane === "active" ? "Send to queue" : "Move to active"}
@@ -163,6 +165,17 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
   const [drop, setDrop] = React.useState(null);
   const ref = React.useRef(null);
 
+  // A task that owns subtasks can't be nested into another — doing so would
+  // orphan its steps. Drags of such tasks only ever produce insertion lines.
+  function draggedHasSubtasks() {
+    const d = window.DRAG;
+    if (!d || !d.taskId) return false;
+    for (const p of state.projects)
+      for (const t of p.tasks)
+        if (t.id === d.taskId) return Array.isArray(t.subtasks) && t.subtasks.length > 0;
+    return false;
+  }
+
   function computeDrop(e) {
     const d = window.DRAG;
     if (!d || !d.taskId) return null;
@@ -184,6 +197,9 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       // Top 30% / bottom 30% drop between rows; middle 40% nests
       if (rel < 0.3) return { type: "between", index: i };
       if (rel > 0.7) return { type: "between", index: i + 1 };
+      // Tasks with their own subtasks can't be nested — fall back to an
+      // insertion line so their steps never get silently dropped.
+      if (draggedHasSubtasks()) return { type: "between", index: rel < 0.5 ? i : i + 1 };
       return { type: "into", taskId: rowTaskId };
     }
     // Below all rows
@@ -207,13 +223,14 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       // Nest the dragged task as a subtask under the target.
       // Note: subtasks are a flatter shape than tasks (id/text/done only) —
       // dragging a complex task in here drops its note/status/subtasks.
-      let draggedText = null;
+      let dragged = null;
       for (const p of state.projects) {
-        for (const t of p.tasks) if (t.id === d.taskId) { draggedText = t.text; break; }
-        if (draggedText) break;
+        for (const t of p.tasks) if (t.id === d.taskId) { dragged = t; break; }
+        if (dragged) break;
       }
-      if (draggedText) {
-        dispatch({ type: "ADD_SUB", taskId: current.taskId, text: draggedText });
+      // Never nest a task that has subtasks — that would discard its steps.
+      if (dragged && !(Array.isArray(dragged.subtasks) && dragged.subtasks.length > 0)) {
+        dispatch({ type: "ADD_SUB", taskId: current.taskId, text: dragged.text });
         dispatch({ type: "DELETE_TASK", taskId: d.taskId });
       }
     } else if (current.type === "between") {

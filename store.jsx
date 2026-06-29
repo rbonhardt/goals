@@ -60,7 +60,7 @@ function quarterIsDue(state, now = new Date()) {
 // ---- seed (from the user's Notion "Focus" doc) ----
 function seed() {
   const startISO = "2026-05-25";
-  const mk = (text, o = {}) => ({ id: uid(), text, status: o.status || "todo", note: o.note || "", big: o.big || null, lane: o.lane || "active", subtasks: o.subtasks || [], type: o.type || "todo", days: o.days || [false, false, false, false, false, false, false], target: o.target || 5 });
+  const mk = (text, o = {}) => ({ id: uid(), text, status: o.status || "todo", note: o.note || "", big: o.big || null, lane: o.lane || "active", subtasks: o.subtasks || [], type: o.type || "todo", days: o.days || [false, false, false, false, false, false, false], target: o.target || 5, recurring: o.recurring != null ? o.recurring : (o.type === "habit") });
   return {
     version: 1,
     week: { n: 22, startISO },
@@ -119,6 +119,7 @@ function migrate(s) {
     if (!Array.isArray(t.days)) t.days = [false, false, false, false, false, false, false];
     if (!t.target) t.target = 5;
     if (!Array.isArray(t.subtasks)) t.subtasks = [];
+    if (t.recurring === undefined) t.recurring = t.type === "habit";
   }));
   return s;
 }
@@ -172,8 +173,10 @@ function reducer(state, action) {
       });
     case "SET_TASK_TYPE":
       return mapTask(state, A.taskId, (t) => A.kind === "habit"
-        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo" }
+        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true }
         : { ...t, type: "todo", status: "todo" });
+    case "TOGGLE_RECURRING":
+      return mapTask(state, A.taskId, (t) => ({ ...t, recurring: !t.recurring }));
     case "SET_STATUS":
       return mapTask(state, A.taskId, (t) => ({ ...t, status: A.status }));
     case "EDIT_TASK_TEXT":
@@ -207,7 +210,7 @@ function reducer(state, action) {
     }
 
     case "ADD_TASK": {
-      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5 };
+      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: A.taskType === "habit" };
       return { ...state, projects: state.projects.map(p =>
         p.id === A.projectId ? { ...p, tasks: A.toTop ? [t, ...p.tasks] : [...p.tasks, t] } : p) };
     }
@@ -277,12 +280,20 @@ function reducer(state, action) {
         }
       }));
       const entry = { n: state.week.n, range: fmtRange(state.week.startISO), completed, journal: A.journal || "", savedAt: Date.now() };
-      // remove finished one-off tasks; KEEP habits (reset for the new week); carry the rest, dropping any subtasks already checked off
+      // Carry-forward rules for the new week:
+      //  • recurring habit → keep it, reset day-marks + status
+      //  • recurring to-do → keep it, full fresh reset (status→todo, all steps unchecked)
+      //  • non-recurring   → behave like a one-off: drop it if done, otherwise carry it
+      //                      over (a habit with recurring off keeps its marks; a to-do
+      //                      drops any steps already checked off)
+      const reset7 = [false,false,false,false,false,false,false];
       const projects = state.projects.map(p => ({ ...p, tasks: p.tasks
-        .filter(t => t.type === "habit" || t.status !== "done")
-        .map(t => t.type === "habit"
-          ? { ...t, days: [false,false,false,false,false,false,false], status: "todo" }
-          : { ...t, subtasks: Array.isArray(t.subtasks) ? t.subtasks.filter(s => !s.done) : t.subtasks })
+        .filter(t => t.recurring || t.status !== "done")
+        .map(t => {
+          if (t.type === "habit") return t.recurring ? { ...t, days: reset7, status: "todo" } : t;
+          if (t.recurring) return { ...t, status: "todo", subtasks: Array.isArray(t.subtasks) ? t.subtasks.map(s => ({ ...s, done: false })) : t.subtasks };
+          return { ...t, subtasks: Array.isArray(t.subtasks) ? t.subtasks.filter(s => !s.done) : t.subtasks };
+        })
       }));
       return { ...state, history: [entry, ...state.history], projects, week: { n: state.week.n + 1, startISO: addDaysISO(state.week.startISO, 7) } };
     }
