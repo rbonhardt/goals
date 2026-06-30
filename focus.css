@@ -249,7 +249,18 @@ button { font-family: inherit; }
 .subs-chev { transition: transform .2s; }
 .subs-chev.closed { transform: rotate(-90deg); }
 .subs-list { margin: 5px 0 2px; padding-left: 4px; border-left: 1.5px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.sub { display: flex; align-items: center; gap: 8px; padding-left: 8px; }
+.sub { display: flex; align-items: center; gap: 8px; padding-left: 2px; position: relative; border-radius: 5px; }
+.sub[draggable] { cursor: default; }
+.sub-grip { color: var(--line-2); font-size: 11px; cursor: grab; letter-spacing: -2px; opacity: 0; transition: opacity .15s; user-select: none; flex: none; width: 8px; }
+.sub:hover .sub-grip { opacity: 1; }
+.sub.drop-before::before {
+  content: ""; position: absolute; top: -3px; left: 16px; right: 4px; height: 2px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.sub.drop-after::after {
+  content: ""; position: absolute; bottom: -3px; left: 16px; right: 4px; height: 2px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
 .sub-box { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line-2); background: none; cursor: pointer; flex: none; position: relative; }
 .sub-box.on { background: var(--ink-2); border-color: var(--ink-2); }
 .sub-box.on::after { content: "✓"; position: absolute; inset: 0; color: var(--paper); font-size: 9px; display: grid; place-items: center; }

@@ -245,6 +245,17 @@ function reducer(state, action) {
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, text: A.text } : s) }));
     case "DEL_SUB":
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.filter(s => s.id !== A.subId) }));
+    case "MOVE_SUB":
+      // reorder a subtask within its parent task to A.toIndex
+      return mapTask(state, A.taskId, (t) => {
+        const from = t.subtasks.findIndex(s => s.id === A.subId);
+        if (from < 0) return t;
+        const subs = t.subtasks.slice();
+        const [moved] = subs.splice(from, 1);
+        const idx = Math.max(0, Math.min(A.toIndex, subs.length));
+        subs.splice(idx, 0, moved);
+        return { ...t, subtasks: subs };
+      });
 
     // ---- projects ----
     case "TOGGLE_QUEUE":

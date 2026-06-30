@@ -46,6 +46,74 @@ function HabitDays({ task, accent }) {
   );
 }
 
+// Subtask list with drag-to-reorder. Drags are scoped to the parent task —
+// a step can be re-ordered among its siblings but not dragged into another task.
+function SubList({ task }) {
+  const { dispatch } = window.useFocusStore();
+  // drop : null | insertion index (where the dragged step would land)
+  const [drop, setDrop] = React.useState(null);
+  const ref = React.useRef(null);
+
+  function startDrag(e, subId) {
+    e.stopPropagation(); // don't also start the parent task's drag
+    window.SUBDRAG = { taskId: task.id, subId };
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", subId); } catch (x) {}
+  }
+
+  function computeDrop(e) {
+    const d = window.SUBDRAG;
+    if (!d || d.taskId !== task.id) return null;
+    const rows = [...ref.current.querySelectorAll(":scope > [data-sub]")];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (e.clientY < r.top || e.clientY > r.bottom) continue;
+      return (e.clientY - r.top) / r.height < 0.5 ? i : i + 1;
+    }
+    return rows.length;
+  }
+
+  function onDragOver(e) {
+    const d = window.SUBDRAG;
+    if (!d || d.taskId !== task.id) return; // ignore drags from elsewhere
+    e.preventDefault();
+    e.stopPropagation();
+    setDrop(computeDrop(e));
+  }
+
+  function onDrop(e) {
+    const d = window.SUBDRAG;
+    if (!d || d.taskId !== task.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = drop != null ? drop : computeDrop(e);
+    setDrop(null);
+    if (idx != null) dispatch({ type: "MOVE_SUB", taskId: task.id, subId: d.subId, toIndex: idx });
+    window.SUBDRAG = null;
+  }
+
+  return (
+    <div className="subs-list" ref={ref}
+      onDragOver={onDragOver}
+      onDragLeave={(e) => { if (!ref.current.contains(e.relatedTarget)) setDrop(null); }}
+      onDrop={onDrop}>
+      {task.subtasks.map((s, i) => (
+        <div className={"sub" + (drop === i ? " drop-before" : "") + (drop === task.subtasks.length && i === task.subtasks.length - 1 ? " drop-after" : "")}
+          key={s.id} data-sub draggable
+          onDragStart={(e) => startDrag(e, s.id)}
+          onDragEnd={() => { window.SUBDRAG = null; setDrop(null); }}>
+          <span className="sub-grip" title="Drag to reorder">⋮⋮</span>
+          <button className={"sub-box" + (s.done ? " on" : "")} onClick={() => dispatch({ type: "TOGGLE_SUB", taskId: task.id, subId: s.id })} />
+          <window.InlineText value={s.text} onCommit={(t) => { if (t) dispatch({ type: "EDIT_SUB", taskId: task.id, subId: s.id, text: t }); else dispatch({ type: "DEL_SUB", taskId: task.id, subId: s.id }); }}
+            className={"sub-text" + (s.done ? " done" : "")} />
+        </div>
+      ))}
+      <window.AddRow className="sub-add" placeholder="Add a step…" chainOnEnter
+        onAdd={(t) => dispatch({ type: "ADD_SUB", taskId: task.id, text: t })} />
+    </div>
+  );
+}
+
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
@@ -112,19 +180,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
                 <span className={"subs-chev" + (showSubs ? "" : " closed")}>⌄</span>
                 {subDone}/{task.subtasks.length} steps
               </button>
-              {showSubs && (
-                <div className="subs-list">
-                  {task.subtasks.map(s => (
-                    <div className="sub" key={s.id}>
-                      <button className={"sub-box" + (s.done ? " on" : "")} onClick={() => dispatch({ type: "TOGGLE_SUB", taskId: task.id, subId: s.id })} />
-                      <window.InlineText value={s.text} onCommit={(t) => { if (t) dispatch({ type: "EDIT_SUB", taskId: task.id, subId: s.id, text: t }); else dispatch({ type: "DEL_SUB", taskId: task.id, subId: s.id }); }}
-                        className={"sub-text" + (s.done ? " done" : "")} />
-                    </div>
-                  ))}
-                  <window.AddRow className="sub-add" placeholder="Add a step…" chainOnEnter
-                    onAdd={(t) => dispatch({ type: "ADD_SUB", taskId: task.id, text: t })} />
-                </div>
-              )}
+              {showSubs && <SubList task={task} />}
             </div>
           )}
         </div>
