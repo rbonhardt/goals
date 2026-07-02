@@ -173,11 +173,11 @@ button { font-family: inherit; }
 .pcard-count { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
 
 /* ---------------- lanes + tasks ---------------- */
-.lane { padding: 4px 6px; min-height: 8px; border-radius: 10px; transition: background .15s; }
+.lane { padding: 2px 6px; min-height: 8px; border-radius: 10px; transition: background .15s; }
 .lane-over { background: oklch(0.93 0.03 70 / .6); outline: 1px dashed var(--line-2); }
 .lane-empty { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--ink-3); padding: 10px 8px; text-align: center; }
 
-.task { border-radius: 10px; padding: 9px 8px; transition: background .15s; position: relative; }
+.task { border-radius: 10px; padding: 5px 8px; transition: background .15s; position: relative; }
 
 /* drag-and-drop targets — insertion line above/below + nest highlight */
 .task.drop-before::before {
@@ -202,14 +202,14 @@ button { font-family: inherit; }
 .task:hover { background: var(--paper-2); }
 .task.status-doing { background: var(--amber-bg); box-shadow: inset 3px 0 0 var(--amber-line); }
 .task.status-doing:hover { background: oklch(0.935 0.05 78); }
-.task-main { display: flex; align-items: flex-start; gap: 9px; }
+.task-main { display: flex; align-items: flex-start; gap: 8px; }
 .task-grip { color: var(--line-2); font-size: 12px; cursor: grab; padding-top: 3px; letter-spacing: -2px; opacity: 0; transition: opacity .15s; user-select: none; flex: none; }
 .task:hover .task-grip { opacity: 1; }
 .task-body { flex: 1; min-width: 0; }
 .task-textline { display: flex; align-items: flex-start; gap: 8px; }
 .task-bigbadge { flex: none; width: 17px; height: 17px; border-radius: 5px; color: var(--paper); font-family: var(--mono); font-size: 10px; font-weight: 600; display: grid; place-items: center; margin-top: 2px; }
-.task-text { font-size: 14.5px; line-height: 1.4; color: var(--ink); text-wrap: pretty; display: block; }
-.task-note { display: block; font-family: var(--serif); font-style: italic; font-size: 13px; line-height: 1.4; color: var(--ink-3); margin-top: 3px; }
+.task-text { font-size: 14.5px; line-height: 1.3; color: var(--ink); text-wrap: pretty; display: block; }
+.task-note { display: block; font-family: var(--serif); font-style: italic; font-size: 13px; line-height: 1.35; color: var(--ink-3); margin-top: 2px; }
 .task-tools { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .15s; flex: none; }
 .task:hover .task-tools { opacity: 1; }
 .ttool { background: none; border: none; cursor: pointer; font-size: 14px; color: var(--ink-2); padding: 3px 5px; border-radius: 6px; line-height: 1; }
@@ -230,12 +230,12 @@ button { font-family: inherit; }
 .habit-tag, .b3-habit-prog { font-family: var(--mono); }
 .habit-tag { flex: none; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; border: 1px solid; border-radius: 5px; padding: 1px 5px; margin-top: 3px; opacity: .8; }
 .b3-habit-prog { font-size: 13px; color: var(--ink-3); font-style: normal; }
-.habit { margin-top: 9px; }
+.habit { margin-top: 6px; }
 .habit-days { display: flex; gap: 5px; }
 .hday { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line-2); background: none; color: var(--ink-3); font-family: var(--mono); font-size: 11px; cursor: pointer; display: grid; place-items: center; transition: all .12s; flex: none; }
 .hday:hover { border-color: var(--ink-2); color: var(--ink); }
 .hday.on { color: white; font-weight: 500; }
-.habit-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.habit-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
 .habit-count { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .habit-count.met { color: oklch(0.55 0.09 142); font-weight: 500; }
 .habit-target { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
@@ -244,7 +244,7 @@ button { font-family: inherit; }
 .habit-step:hover { border-color: var(--ink-2); color: var(--ink); }
 
 /* subtasks */
-.subs { margin-top: 7px; }
+.subs { margin-top: 4px; }
 .subs-toggle { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 11px; color: var(--ink-3); padding: 2px 0; }
 .subs-chev { transition: transform .2s; }
 .subs-chev.closed { transform: rotate(-90deg); }
@@ -269,7 +269,7 @@ button { font-family: inherit; }
 .sub-add { font-size: 12px !important; color: var(--ink-3) !important; padding-left: 8px !important; }
 
 /* add row */
-.addrow { display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer; color: var(--ink-3); font-family: var(--sans); font-size: 13.5px; padding: 9px 8px; width: 100%; text-align: left; border-radius: 8px; }
+.addrow { display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer; color: var(--ink-3); font-family: var(--sans); font-size: 13.5px; padding: 6px 8px; width: 100%; text-align: left; border-radius: 8px; }
 .addrow:hover { color: var(--ink); background: var(--paper-2); }
 .addrow-plus { font-size: 15px; line-height: 1; }
 .addrow-input { width: 100%; border: none; background: var(--paper-2); border-radius: 8px; padding: 9px 12px; font-family: var(--sans); font-size: 14px; color: var(--ink); }
