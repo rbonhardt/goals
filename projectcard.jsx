@@ -117,7 +117,7 @@ function SubList({ task }) {
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
-  const [showSubs, setShowSubs] = React.useState(task.subtasks.length > 0);
+  const [showSubs, setShowSubs] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   // One-shot flag: when true, the note InlineText mounts already in editing
   // mode so the cursor lands inside it. Cleared after a render so future
