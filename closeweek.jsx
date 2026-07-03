@@ -19,6 +19,7 @@ function CloseWeek({ onClose }) {
       t.subtasks.forEach(s => { if (s.done) completed.push({ project: p.name, accent: p.accent, text: s.text, parent: t.text }); });
     }
   }));
+  window.selSchedCompletedForWeek(state).forEach(c => completed.push(c));
   const carry = [];
   state.projects.forEach(p => p.tasks.forEach(t => { if (t.lane === "active" && t.type !== "habit" && t.status !== "done") carry.push(t); }));
 

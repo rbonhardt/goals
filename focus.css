@@ -489,3 +489,36 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
   .b3-tile, .ns-tile { padding: 20px; }
   .b3-text { font-size: 17px; }
 }
+
+/* ---------------- scheduled strip ---------------- */
+.sched { margin-top: 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px 14px; box-shadow: 0 1px 2px oklch(0.5 0.02 60 / .04); }
+.sched-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.sched-sub { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--ink-3); }
+.sched-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: oklch(0.55 0.09 142); }
+.sched-count.hot { color: var(--clay); font-weight: 500; }
+.sched-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.sched-item { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px 9px; background: oklch(0.975 0.010 84); transition: border-color .15s, background .15s, opacity .15s; }
+.sched-item .st { margin-top: 2px; }
+.sched-item.is-today { border-color: var(--amber-line); background: var(--amber-bg); }
+.sched-item.is-overdue { border-color: oklch(0.72 0.11 42); background: oklch(0.955 0.030 42); }
+.sched-item.is-done { opacity: .62; }
+.sched-body { flex: 1; min-width: 0; }
+.sched-text { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; }
+.sched-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.sched-when { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; }
+.sched-due { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.sched-due-today { color: oklch(0.60 0.12 72); font-weight: 500; }
+.sched-due-overdue { color: oklch(0.55 0.14 38); font-weight: 500; }
+.sched-due-done { color: oklch(0.55 0.09 142); }
+.sched-add { min-height: 46px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); }
+.sched-pop { min-width: 216px; }
+.sched-cad-row { display: flex; gap: 6px; padding: 4px 6px 6px; }
+.sched-cad-row button { flex: 1; text-align: center; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; padding: 5px 0; border: 1px solid var(--line-2); border-radius: 6px; color: var(--ink-3); }
+.sched-cad-row button.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.sched-day-row { display: flex; gap: 4px; padding: 2px 8px 8px; }
+.sched-date-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px 10px; font-size: 12.5px; color: var(--ink-2); }
+.sched-date-input { width: 52px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 6px; font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--card); }
+
+@media (max-width: 880px) {
+  .sched-list { grid-template-columns: 1fr; }
+}

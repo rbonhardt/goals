@@ -127,6 +127,8 @@ function App({ session }) {
 
         <window.Composer />
 
+        <window.Scheduled />
+
         <div className="projects">
           {state.projects.map(p => <window.ProjectCard key={p.id} project={p} />)}
           <div className="pcard pcard-add">

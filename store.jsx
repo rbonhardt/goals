@@ -57,6 +57,14 @@ function quarterIsDue(state, now = new Date()) {
   return today >= end;
 }
 
+// ---- default scheduled commitments (used by seed + first migration) ----
+function defaultScheduled() {
+  return [
+    { id: uid(), text: "Charlotte Social — weekly pricing review", note: "Sun 7:00 pm · run /pricing-review in the Arete folder", cadence: "weekly", day: 6, date: 1, doneFor: null, doneAt: null },
+    { id: uid(), text: "Charlotte Social — monthly finance review", note: "1st · 9:00 am · review flagged items from the auto-close", cadence: "monthly", day: 6, date: 1, doneFor: null, doneAt: null },
+  ];
+}
+
 // ---- seed (from the user's Notion "Focus" doc) ----
 function seed() {
   const startISO = "2026-05-25";
@@ -98,6 +106,7 @@ function seed() {
         mk("Harada method — pg 26", { lane: "queue" }),
       ]},
     ],
+    scheduled: defaultScheduled(),
     history: [],
   };
 }
@@ -114,6 +123,16 @@ function load() {
 function migrate(s) {
   if (!s || !s.projects) return seed();
   if (!s.quarterHistory) s.quarterHistory = [];
+  // scheduled strip added later: seed the defaults only when the field has
+  // never existed (an emptied list stays empty)
+  if (!Array.isArray(s.scheduled)) s.scheduled = defaultScheduled();
+  s.scheduled.forEach(it => {
+    if (!it.cadence) it.cadence = "weekly";
+    if (it.day == null) it.day = 6;
+    if (!it.date) it.date = 1;
+    if (it.doneFor === undefined) it.doneFor = null;
+    if (it.doneAt === undefined) it.doneAt = null;
+  });
   s.projects.forEach(p => (p.tasks || []).forEach(t => {
     if (!t.type) t.type = "todo";
     if (!Array.isArray(t.days)) t.days = [false, false, false, false, false, false, false];
@@ -277,6 +296,35 @@ function reducer(state, action) {
       return { ...state, projects: A.order.map(id => byId[id]).filter(Boolean) };
     }
 
+    // ---- scheduled (recurring commitments on a weekly/monthly cadence) ----
+    case "ADD_SCHEDULED":
+      return { ...state, scheduled: [...(state.scheduled || []), {
+        id: uid(), text: A.text, note: A.note || "",
+        cadence: A.cadence === "monthly" ? "monthly" : "weekly",
+        day: A.day != null ? A.day : 6,
+        date: A.date != null ? Math.max(1, Math.min(31, A.date)) : 1,
+        doneFor: null, doneAt: null,
+      }] };
+    case "TOGGLE_SCHEDULED":
+      // done-state is per period: A.periodKey is the week startISO (weekly)
+      // or "YYYY-MM" (monthly); a stale doneFor simply stops matching
+      return { ...state, scheduled: state.scheduled.map(it => it.id !== A.id ? it
+        : it.doneFor === A.periodKey ? { ...it, doneFor: null, doneAt: null }
+        : { ...it, doneFor: A.periodKey, doneAt: A.todayISO }) };
+    case "EDIT_SCHEDULED_TEXT":
+      return { ...state, scheduled: state.scheduled.map(it => it.id === A.id ? { ...it, text: A.text } : it) };
+    case "EDIT_SCHEDULED_NOTE":
+      return { ...state, scheduled: state.scheduled.map(it => it.id === A.id ? { ...it, note: A.note } : it) };
+    case "SET_SCHEDULED_CADENCE":
+      return { ...state, scheduled: state.scheduled.map(it => it.id === A.id ? {
+        ...it,
+        cadence: A.cadence || it.cadence,
+        day: A.day != null ? A.day : it.day,
+        date: A.date != null ? Math.max(1, Math.min(31, A.date)) : it.date,
+      } : it) };
+    case "DELETE_SCHEDULED":
+      return { ...state, scheduled: state.scheduled.filter(it => it.id !== A.id) };
+
     // ---- close the week ----
     case "CLOSE_WEEK": {
       const completed = [];
@@ -290,6 +338,7 @@ function reducer(state, action) {
           });
         }
       }));
+      selSchedCompletedForWeek(state).forEach(c => completed.push(c));
       const entry = { n: state.week.n, range: fmtRange(state.week.startISO), completed, journal: A.journal || "", savedAt: Date.now() };
       // Carry-forward rules for the new week:
       //  • recurring habit → keep it, reset day-marks + status
@@ -323,6 +372,8 @@ function reducer(state, action) {
       for (const act of A.actions) {
         if (act.kind === "add_project") {
           s = reducer(s, { type: "ADD_PROJECT", name: act.name, tasks: act.tasks });
+        } else if (act.kind === "add_scheduled") {
+          s = reducer(s, { type: "ADD_SCHEDULED", text: act.text, note: act.note, cadence: act.cadence, day: act.day, date: act.date });
         } else if (act.kind === "add_task") {
           const proj = resolveProject(s, act.project);
           if (proj) {
@@ -435,10 +486,20 @@ function selActive(p) {
   return a.slice().sort((x, y) => (x.big || 99) - (y.big || 99));
 }
 function selQueue(p) { return p.tasks.filter(t => t.lane === "queue"); }
+// scheduled items completed during the current app-week (used by the
+// close-week recap): weekly items done for this week, plus monthly items
+// whose check-off date falls inside the week
+function selSchedCompletedForWeek(state) {
+  const start = state.week.startISO, end = addDaysISO(start, 7);
+  return (state.scheduled || [])
+    .filter(it => (it.cadence !== "monthly" && it.doneFor === start)
+               || (it.cadence === "monthly" && it.doneAt && it.doneAt >= start && it.doneAt < end))
+    .map(it => ({ project: "Scheduled", accent: "oklch(0.640 0.100 75)", text: it.text }));
+}
 function selProgress(state) {
   let done = 0, total = 0;
   state.projects.forEach(p => p.tasks.filter(t => t.lane === "active").forEach(t => { total++; if (t.status === "done") done++; }));
   return { done, total };
 }
 
-Object.assign(window, { FocusProvider, useFocusStore, fmtRange, selBigThree, selActive, selQueue, selProgress, uid, quarterIsDue, quarterEndDate });
+Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, uid, quarterIsDue, quarterEndDate });
