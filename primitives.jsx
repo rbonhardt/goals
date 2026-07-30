@@ -151,6 +151,16 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
             else commit();
             return;
           }
+          // Shift+Tab — leave subtask mode. Checked before plain Tab, which
+          // would otherwise swallow it and push us *deeper* instead. With
+          // nothing to back out of we let it through, so focus can still
+          // walk backwards out of the field.
+          if (e.key === "Tab" && e.shiftKey) {
+            if (!subMode) return;
+            e.preventDefault();
+            setSubMode(false);
+            return;
+          }
           // Tab — flip into subtask mode (subsequent commits go to the last task)
           if (e.key === "Tab" && allowTab) {
             e.preventDefault();
@@ -162,12 +172,6 @@ function AddRow({ onAdd, placeholder = "Add…", className, chainOnEnter, allowT
               // empty Tab on an already-added task → enter sub mode
               setSubMode(true);
             }
-            return;
-          }
-          // Shift+Tab — leave subtask mode
-          if (e.key === "Tab" && e.shiftKey) {
-            e.preventDefault();
-            setSubMode(false);
             return;
           }
           // Option/Alt + H — toggle habit mode for the about-to-be-created task.

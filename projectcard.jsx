@@ -159,7 +159,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
           : <window.StatusToggle status={task.status} onCycle={() => dispatch({ type: "CYCLE_STATUS", taskId: task.id })} />}
         <div className="task-body">
           <div className="task-textline">
-            {task.big && lane === "active" && <span className="task-bigbadge" style={{ background: project.accent }}>{task.big}</span>}
+            {task.big && <span className="task-bigbadge" style={{ background: project.accent }}>{task.big}</span>}
             {isHabit && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }}>habit</span>}
             {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
@@ -186,11 +186,10 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
         </div>
 
         <div className="task-tools">
-          {lane === "active" && (
-            task.big
-              ? <button className="ttool" title="Pinned to Big Three" onClick={() => dispatch({ type: "CLEAR_BIG", taskId: task.id })} style={{ color: project.accent }}>★</button>
-              : <button className="ttool ttool-faint" title="Promote to Big Three" onClick={() => dispatch({ type: "PROMOTE_NEXT", taskId: task.id })}>☆</button>
-          )}
+          {/* starring a queued task promotes it out of the queue and into this week */}
+          {task.big
+            ? <button className="ttool" title="Pinned to Big Three" onClick={() => dispatch({ type: "CLEAR_BIG", taskId: task.id })} style={{ color: project.accent }}>★</button>
+            : <button className="ttool ttool-faint" title={lane === "queue" ? "Promote to Big Three (moves it to this week)" : "Promote to Big Three"} onClick={() => dispatch({ type: "PROMOTE_NEXT", taskId: task.id })}>☆</button>}
           <div className="ttool-menu" data-popmenu={menuOpen ? "" : null}>
             <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}>⋯</button>
             {menuOpen && (
@@ -413,7 +412,7 @@ function ProjectCard({ project }) {
             openNoteForId={openNoteForId}
             onNoteOpened={() => setOpenNoteForId(null)}>
             <window.AddRow className="task-add" placeholder="Park something for later…"
-              chainOnEnter allowNote
+              chainOnEnter allowTab allowHabit allowNote
               onAdd={(t, extras) => handleAdd("queue", t, extras)} />
           </Lane>
         )}

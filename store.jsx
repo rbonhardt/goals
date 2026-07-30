@@ -116,7 +116,7 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) return migrate(JSON.parse(raw));
   } catch (e) {}
-  return seed();
+  return migrate(seed());
 }
 
 // backfill fields added in later versions so older saved state never crashes
@@ -140,7 +140,87 @@ function migrate(s) {
     if (!Array.isArray(t.subtasks)) t.subtasks = [];
     if (t.recurring === undefined) t.recurring = t.type === "habit";
   }));
-  return s;
+  return sinkDone(s);
+}
+
+// ============================================================
+// ordering — finished work sinks
+// ============================================================
+// A task that gets checked off drops to the bottom of the lane it lives in,
+// and a checked step drops to the bottom of its parent's list. The done pile
+// stays in completion order (newest at the very bottom); everything unfinished
+// keeps the order it was dragged into.
+
+// Strictly-increasing stamp: wall-clock so the order survives a reload or a
+// sync from another device, bumped by hand if two things land in the same
+// millisecond so the last thing checked is always last.
+let lastStamp = 0;
+function nowStamp() { lastStamp = Math.max(Date.now(), lastStamp + 1); return lastStamp; }
+
+// Pull the high-water mark up to anything already in state before we issue a
+// new stamp. Without this a fresh tab (lastStamp back at 0) or a state synced
+// from a device whose clock runs ahead could mint a stamp that sorts *above*
+// items completed earlier, and the newest thing wouldn't land at the bottom.
+function absorbStamps(state) {
+  state.projects.forEach(p => (p.tasks || []).forEach(t => {
+    if (t.completedAt > lastStamp) lastStamp = t.completedAt;
+    if (Array.isArray(t.subtasks)) t.subtasks.forEach(s => { if (s.completedAt > lastStamp) lastStamp = s.completedAt; });
+  }));
+}
+
+// Records when something was completed, and forgets it when unchecked.
+// Returns the same object when nothing changed so the store doesn't churn.
+function stamp(item, done) {
+  if (done && !item.completedAt) return { ...item, completedAt: nowStamp() };
+  if (!done && item.completedAt) return { ...item, completedAt: null };
+  return item;
+}
+
+function cmpTasks(a, b) {
+  const da = a.status === "done" ? 1 : 0, db = b.status === "done" ? 1 : 0;
+  if (da !== db) return da - db;                                 // unfinished first
+  return da ? (a.completedAt || 0) - (b.completedAt || 0)        // done pile: oldest → newest
+            : (a.big || 9) - (b.big || 9);                       // this week: Big Three first
+}
+function cmpSubs(a, b) {
+  const da = a.done ? 1 : 0, db = b.done ? 1 : 0;
+  if (da !== db) return da - db;
+  return da ? (a.completedAt || 0) - (b.completedAt || 0) : 0;
+}
+
+function stableSort(list, cmp) {
+  const out = list
+    .map((x, i) => ({ x, i }))
+    .sort((a, b) => cmp(a.x, b.x) || a.i - b.i)
+    .map(o => o.x);
+  // hand back the original array when nothing moved, so an action that changes
+  // no order doesn't churn state (and re-trigger a sync push)
+  return out.some((x, i) => x !== list[i]) ? out : list;
+}
+
+// Applied after every action so the *stored* order always matches what's on
+// screen — drag-and-drop insert indexes are computed against the rendered list,
+// so the two must not drift apart.
+function sinkDone(state) {
+  if (!state || !Array.isArray(state.projects)) return state;
+  absorbStamps(state); // must run before any stamp() below mints a new one
+  let moved = false;
+  const projects = state.projects.map(p => {
+    const orig = p.tasks || [];
+    // lanes sort independently; anything with an unknown lane is left untouched
+    const active = [], queue = [], other = [];
+    orig.map(t => {
+      t = stamp(t, t.status === "done");
+      if (!Array.isArray(t.subtasks) || !t.subtasks.length) return t;
+      const subtasks = stableSort(t.subtasks.map(s => stamp(s, s.done)), cmpSubs);
+      return subtasks.every((s, i) => s === t.subtasks[i]) ? t : { ...t, subtasks };
+    }).forEach(t => (t.lane === "queue" ? queue : t.lane === "active" ? active : other).push(t));
+    const tasks = [...stableSort(active, cmpTasks), ...stableSort(queue, cmpTasks), ...other];
+    if (tasks.every((t, i) => t === orig[i])) return p;
+    moved = true;
+    return { ...p, tasks };
+  });
+  return moved ? { ...state, projects } : state;
 }
 
 // ============================================================
@@ -153,7 +233,12 @@ function findTask(state, taskId) {
   return {};
 }
 
+// every dispatch runs through sinkDone so completed items re-settle immediately
 function reducer(state, action) {
+  return sinkDone(applyAction(state, action));
+}
+
+function applyAction(state, action) {
   const A = action;
   switch (A.type) {
     case "RESET_ALL": return seed();
@@ -238,9 +323,19 @@ function reducer(state, action) {
 
     case "MOVE_TASK": {
       // move task to {toProject, toLane, toIndex} computed against the target lane's filtered list
-      const { task } = findTask(state, A.taskId);
-      if (!task) return state;
+      const { project: from, task } = findTask(state, A.taskId);
+      // bail before the removal step below if there's nowhere to put it —
+      // otherwise an unknown destination silently deletes the task
+      if (!task || !state.projects.some(p => p.id === A.toProject)) return state;
       const moved = { ...task, lane: A.toLane, big: A.toLane === "queue" ? null : task.big };
+      // The drop index was measured against the rendered lane, which still had
+      // the dragged row in it. Sliding a row *down* inside its own lane must
+      // therefore lose one, or it lands a slot further than where it was let go.
+      let want = A.toIndex;
+      if (want != null && from && from.id === A.toProject && task.lane === A.toLane) {
+        const wasAt = from.tasks.filter(t => t.lane === A.toLane).findIndex(t => t.id === A.taskId);
+        if (wasAt > -1 && wasAt < want) want -= 1;
+      }
       // remove from all
       let projects = state.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== A.taskId) }));
       projects = projects.map(p => {
@@ -248,7 +343,7 @@ function reducer(state, action) {
         // rebuild: keep other-lane tasks in place, splice moved into the target lane at toIndex
         const sameLane = p.tasks.filter(t => t.lane === A.toLane);
         const otherLane = p.tasks.filter(t => t.lane !== A.toLane);
-        const idx = Math.max(0, Math.min(A.toIndex == null ? sameLane.length : A.toIndex, sameLane.length));
+        const idx = Math.max(0, Math.min(want == null ? sameLane.length : want, sameLane.length));
         sameLane.splice(idx, 0, moved);
         return { ...p, tasks: [...sameLane, ...otherLane] };
       });
@@ -271,7 +366,10 @@ function reducer(state, action) {
         if (from < 0) return t;
         const subs = t.subtasks.slice();
         const [moved] = subs.splice(from, 1);
-        const idx = Math.max(0, Math.min(A.toIndex, subs.length));
+        // same off-by-one as MOVE_TASK: the index was read with the dragged
+        // step still occupying a slot, so a downward move loses one
+        const want = A.toIndex == null ? subs.length : A.toIndex > from ? A.toIndex - 1 : A.toIndex;
+        const idx = Math.max(0, Math.min(want, subs.length));
         subs.splice(idx, 0, moved);
         return { ...t, subtasks: subs };
       });
@@ -481,11 +579,10 @@ function selBigThree(state) {
   state.projects.forEach(p => p.tasks.forEach(t => { if (t.big >= 1 && t.big <= 3) out[t.big - 1] = { ...t, projectId: p.id, projectName: p.name, accent: p.accent }; }));
   return out;
 }
-function selActive(p) {
-  const a = p.tasks.filter(t => t.lane === "active");
-  return a.slice().sort((x, y) => (x.big || 99) - (y.big || 99));
-}
-function selQueue(p) { return p.tasks.filter(t => t.lane === "queue"); }
+// sinkDone already normalises the stored order; these sorts just make the
+// rendered list independent of that (and keep the two definitions in one place)
+function selActive(p) { return p.tasks.filter(t => t.lane === "active").sort(cmpTasks); }
+function selQueue(p)  { return p.tasks.filter(t => t.lane === "queue").sort(cmpTasks); }
 // scheduled items completed during the current app-week (used by the
 // close-week recap): weekly items done for this week, plus monthly items
 // whose check-off date falls inside the week
