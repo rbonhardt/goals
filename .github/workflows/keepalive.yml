@@ -1,0 +1,21 @@
+name: Supabase keep-alive
+
+# Free-tier Supabase projects pause after ~1 week of no activity.
+# This ping counts as activity, so the project never goes idle.
+# The publishable key is safe to expose — RLS protects the data
+# (same key already shipped in config.js).
+
+on:
+  schedule:
+    - cron: "0 12 * * 1,4" # Mondays and Thursdays, 12:00 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: |
+          curl -sS --fail --max-time 30 --retry 3 --retry-delay 10 \
+            -H "apikey: sb_publishable_jtfOGXG9ejm1DoeflNLLLw_UnFhmkBH" \
+            "https://vaxltvzsqbedvjtoljnz.supabase.co/rest/v1/app_state?select=updated_at&limit=1"
