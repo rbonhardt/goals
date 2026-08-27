@@ -4,16 +4,71 @@
 const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-// Generic click-outside-to-close hook. Element must carry the `data-popmenu` attribute.
-function useClickOutside(open, onClose) {
+// True on devices with a real pointer; hover-to-open only makes sense there.
+// Touch browsers synthesize mouse events on tap, which would make the same
+// tap open (mouseenter) and immediately close (click-toggle) the menu.
+const CAN_HOVER = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+// Close when clicking anywhere outside this menu's own wrapper (ref).
+function useClickOutside(open, ref, onClose) {
   React.useEffect(() => {
     if (!open) return;
     const handle = (e) => {
-      if (!e.target.closest("[data-popmenu]")) onClose();
+      if (ref.current && !ref.current.contains(e.target)) onClose();
     };
     document.addEventListener("mousedown", handle);
     return () => document.removeEventListener("mousedown", handle);
-  }, [open, onClose]);
+  }, [open, ref, onClose]);
+}
+
+// Only one ⋯ menu open at a time, app-wide — opening one closes the previous,
+// however the previous was opened (hover, click, or touch).
+let closeOpenMenu = null;
+function useSoloMenu(open, close) {
+  React.useEffect(() => {
+    if (!open) return;
+    if (closeOpenMenu && closeOpenMenu !== close) closeOpenMenu();
+    closeOpenMenu = close;
+    return () => { if (closeOpenMenu === close) closeOpenMenu = null; };
+  }, [open, close]);
+}
+
+// Hover-to-open for the ⋯ menus. Returns a ref for the wrapper div. Native
+// mouseenter/mouseleave (not React synthetics) so hover works the same as
+// CSS :hover. The short leave-delay forgives the mouse briefly slipping off
+// the wrapper on the way into the pop menu; it holds off while keyboard
+// focus is inside, so tabbing through the menu doesn't yank it away. On
+// touch devices (no hover) the listeners are skipped and click toggles.
+function useHoverMenu(setOpen) {
+  const ref = React.useRef(null);
+  const timer = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || !CAN_HOVER) return;
+    const enter = () => { clearTimeout(timer.current); setOpen(true); };
+    const leave = () => {
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        if (el.contains(document.activeElement)) return;
+        setOpen(false);
+      }, 200);
+    };
+    // Tab-out closes too — the leave timer defers to inside focus, so without
+    // this a keyboard user could strand the menu open after the pointer left.
+    const focusLeave = (e) => {
+      if (!el.contains(e.relatedTarget) && !el.matches(":hover")) setOpen(false);
+    };
+    el.addEventListener("mouseenter", enter);
+    el.addEventListener("mouseleave", leave);
+    el.addEventListener("focusout", focusLeave);
+    return () => {
+      clearTimeout(timer.current);
+      el.removeEventListener("mouseenter", enter);
+      el.removeEventListener("mouseleave", leave);
+      el.removeEventListener("focusout", focusLeave);
+    };
+  }, [setOpen]);
+  return ref;
 }
 
 function HabitDays({ task, accent }) {
@@ -116,13 +171,13 @@ function SubList({ task }) {
 
 // Small date pill on a task row. Muted normally, amber inside 3 days,
 // clay when overdue. Click opens the row's date editor.
-function DueChip({ task, onEdit }) {
+function DueChip({ task, onEdit, chipRef }) {
   const d = window.daysUntil(task.due);
   const label = new Date(task.due + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const cls = d < 0 ? " overdue" : d <= 3 ? " soon" : "";
   const rel = d < 0 ? "late" : d === 0 ? "today" : d <= window.DUE_LEAD_DAYS ? `${d}d` : null;
   return (
-    <button className={"due-chip" + cls}
+    <button className={"due-chip" + cls} ref={chipRef}
       title={`Due ${label}${rel ? " (" + (d < 0 ? "overdue" : rel === "today" ? "due today" : "in " + rel) + ")" : ""} — click to change`}
       onClick={(e) => { e.stopPropagation(); onEdit(); }}>
       {label}{rel ? " · " + rel : ""}
@@ -136,13 +191,22 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
   const [showSubs, setShowSubs] = React.useState(false);
   const [showDue, setShowDue] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
+  const chipRef = React.useRef(null);
+  // refocus=true hands keyboard focus back to the chip (Enter/Escape close);
+  // the timeout lets the chip re-mount first
+  const closeDueEditor = (refocus) => {
+    setShowDue(false);
+    if (refocus) setTimeout(() => { if (chipRef.current) chipRef.current.focus(); }, 0);
+  };
   // One-shot flag: when true, the note InlineText mounts already in editing
   // mode so the cursor lands inside it. Cleared after a render so future
   // re-renders don't keep forcing edit mode.
   const [autoEditNote, setAutoEditNote] = React.useState(false);
-  useClickOutside(menuOpen, () => setMenuOpen(false));
   const subDone = task.subtasks.filter(s => s.done).length;
-  const closeMenu = () => setMenuOpen(false);
+  const closeMenu = React.useCallback(() => setMenuOpen(false), []);
+  const hoverMenu = useHoverMenu(setMenuOpen);
+  useClickOutside(menuOpen, hoverMenu, closeMenu);
+  useSoloMenu(menuOpen, closeMenu);
 
   // AddRow Shift+N signals "open the note field for the task it just created".
   // ProjectCard sets openNoteForId; we react once, then clear it via onNoteOpened.
@@ -181,16 +245,23 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
             {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
               className={"task-text st-text-" + task.status} placeholder="Task…" />
-            {!isHabit && task.due && <DueChip task={task} onEdit={() => setShowDue(s => !s)} />}
+            {!isHabit && task.due && !showDue && <DueChip task={task} chipRef={chipRef} onEdit={() => setShowDue(true)} />}
           </div>
 
           {showDue && (
-            <div className="due-edit" onClick={(e) => e.stopPropagation()}>
-              <input type="date" className="due-input" value={task.due || ""} aria-label="Due date"
-                onChange={(e) => dispatch({ type: "SET_DUE", taskId: task.id, due: e.target.value })} />
+            <div className="due-edit" onClick={(e) => e.stopPropagation()}
+              onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowDue(false); }}>
+              {/* Blur sits on the wrapper: clicking or tabbing anywhere outside
+                  it closes the editor, while moving focus to the clear button
+                  keeps it open — the chip is then the one way back in. The
+                  clear button also eats mousedown for Safari, where buttons
+                  don't take focus on click (relatedTarget would be null). */}
+              <input type="date" className="due-input" value={task.due || ""} aria-label="Due date" autoFocus
+                onChange={(e) => dispatch({ type: "SET_DUE", taskId: task.id, due: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); closeDueEditor(true); } }} />
               {lane === "queue" && <span className="due-hint">surfaces {window.DUE_LEAD_DAYS} days out</span>}
-              {task.due && <button onClick={() => { dispatch({ type: "SET_DUE", taskId: task.id, due: null }); setShowDue(false); }}>clear</button>}
-              <button onClick={() => setShowDue(false)}>done</button>
+              {task.due && <button onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { dispatch({ type: "SET_DUE", taskId: task.id, due: null }); closeDueEditor(false); }}>clear</button>}
             </div>
           )}
 
@@ -218,8 +289,10 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
           {task.big
             ? <button className="ttool" title="Pinned to Big Three" onClick={() => dispatch({ type: "CLEAR_BIG", taskId: task.id })} style={{ color: project.accent }}>★</button>
             : <button className="ttool ttool-faint" title={lane === "queue" ? "Promote to Big Three (moves it to this week)" : "Promote to Big Three"} onClick={() => dispatch({ type: "PROMOTE_NEXT", taskId: task.id })}>☆</button>}
-          <div className="ttool-menu" data-popmenu={menuOpen ? "" : null}>
-            <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}>⋯</button>
+          <div className="ttool-menu" data-popmenu={menuOpen ? "" : null} ref={hoverMenu}>
+            {/* on hover-capable devices the menu is already open by the time a
+                click lands, so a toggle would close it — open-only there */}
+            <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => CAN_HOVER || !o); }}>⋯</button>
             {menuOpen && (
               <div className="menu-pop open">
                 {!task.note && !showNote && <button onClick={() => { setShowNote(true); closeMenu(); }}>Add note</button>}
@@ -354,7 +427,10 @@ function ProjectCard({ project }) {
   const active = window.selActive(project);
   const queue = window.selQueue(project);
   const [menuOpen, setMenuOpen] = React.useState(false);
-  useClickOutside(menuOpen, () => setMenuOpen(false));
+  const closeMenu = React.useCallback(() => setMenuOpen(false), []);
+  const hoverMenu = useHoverMenu(setMenuOpen);
+  useClickOutside(menuOpen, hoverMenu, closeMenu);
+  useSoloMenu(menuOpen, closeMenu);
   // Remember the last task added via the AddRow so Tab/Enter chain can attach
   // subtasks (or further subtasks) to it. Reset to null whenever the project
   // changes from outside the AddRow flow.
@@ -406,8 +482,8 @@ function ProjectCard({ project }) {
         <span className="pcard-swatch" style={{ background: project.accent }} />
         <window.InlineText value={project.name} onCommit={(t) => dispatch({ type: "RENAME_PROJECT", projectId: project.id, name: t })} className="pcard-name" serif placeholder="Project" />
         <span className="pcard-count">{doneCount}/{active.length}</span>
-        <div className="ttool-menu" data-popmenu={menuOpen ? "" : null}>
-          <button className="ttool ttool-faint" title="Project options" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o); }}>⋯</button>
+        <div className="ttool-menu" data-popmenu={menuOpen ? "" : null} ref={hoverMenu}>
+          <button className="ttool ttool-faint" title="Project options" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => CAN_HOVER || !o); }}>⋯</button>
           {menuOpen && (
             <div className="menu-pop open">
               <div className="menu-swatches">
