@@ -229,6 +229,17 @@ button { font-family: inherit; }
 /* habit tracker */
 .habit-tag, .b3-habit-prog { font-family: var(--mono); }
 .habit-tag { flex: none; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; border: 1px solid; border-radius: 5px; padding: 1px 5px; margin-top: 3px; opacity: .8; }
+
+/* ---- due dates ---- */
+.due-chip { flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--ink-3); background: none; border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; margin-top: 2px; cursor: pointer; }
+.due-chip:hover { color: var(--ink-2); border-color: var(--ink-3); }
+.due-chip.soon { color: oklch(0.56 0.11 72); border-color: var(--amber-line); background: var(--amber-bg); }
+.due-chip.overdue { color: oklch(0.50 0.13 42); border-color: oklch(0.80 0.09 42); background: oklch(0.945 0.045 42); }
+.due-edit { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.due-input { font-family: var(--mono); font-size: 12px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 6px; }
+.due-hint { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.due-edit button { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); background: none; border: none; cursor: pointer; padding: 2px 4px; }
+.due-edit button:hover { color: var(--ink); }
 .b3-habit-prog { font-size: 13px; color: var(--ink-3); font-style: normal; }
 .habit { margin-top: 6px; }
 .habit-days { display: flex; gap: 5px; }

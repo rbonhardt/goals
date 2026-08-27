@@ -32,6 +32,28 @@ function addDaysISO(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// ---- due-date helpers ----
+// Local calendar date (toISOString would jump to tomorrow after 7-8pm ET).
+const DUE_LEAD_DAYS = 10;
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function daysUntil(dueISO, fromISO = todayISO()) {
+  const a = new Date(fromISO + "T00:00:00"), b = new Date(dueISO + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
+// Strict YYYY-MM-DD or null. Round-trips through Date to reject impossible
+// dates ("2026-02-31" silently becomes Mar 3) — a malformed due would make
+// daysUntil return NaN, and NaN > lead is false, which would auto-promote.
+function cleanDue(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const d = new Date(v + "T00:00:00");
+  if (isNaN(d)) return null;
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return iso === v ? v : null;
+}
+
 // ---- quarter end-date helpers ----
 // Quarter ranges are stored as plain text like "Apr 1 – Jun 30" (no year).
 // We pull the year from the active week so the end date tracks the real timeline.
@@ -139,6 +161,8 @@ function migrate(s) {
     if (!t.target) t.target = 5;
     if (!Array.isArray(t.subtasks)) t.subtasks = [];
     if (t.recurring === undefined) t.recurring = t.type === "habit";
+    t.due = cleanDue(t.due);
+    if (t.duePromoted === undefined) t.duePromoted = false;
   }));
   return sinkDone(s);
 }
@@ -198,11 +222,34 @@ function stableSort(list, cmp) {
   return out.some((x, i) => x !== list[i]) ? out : list;
 }
 
+// ---- due dates: queued work surfaces on its own ----
+// A queued task whose due date is DUE_LEAD_DAYS away or closer hops to the
+// active lane, once. duePromoted remembers the hop, so dragging it back to the
+// queue sticks — it won't bounce out again unless the due date is changed
+// (SET_DUE re-arms it). Runs inside sinkDone, so it fires on load, on every
+// action, and on every remote-sync hydrate.
+function promoteDue(state) {
+  const today = todayISO();
+  let moved = false;
+  const projects = state.projects.map(p => {
+    const tasks = (p.tasks || []).map(t => {
+      if (t.lane !== "queue" || !t.due || t.duePromoted || t.type === "habit" || t.status === "done") return t;
+      const d = daysUntil(t.due, today);
+      if (!Number.isFinite(d) || d > DUE_LEAD_DAYS) return t;
+      moved = true;
+      return { ...t, lane: "active", duePromoted: true };
+    });
+    return tasks.some((t, i) => t !== p.tasks[i]) ? { ...p, tasks } : p;
+  });
+  return moved ? { ...state, projects } : state;
+}
+
 // Applied after every action so the *stored* order always matches what's on
 // screen — drag-and-drop insert indexes are computed against the rendered list,
 // so the two must not drift apart.
 function sinkDone(state) {
   if (!state || !Array.isArray(state.projects)) return state;
+  state = promoteDue(state);
   absorbStamps(state); // must run before any stamp() below mints a new one
   let moved = false;
   const projects = state.projects.map(p => {
@@ -276,8 +323,9 @@ function applyAction(state, action) {
         return { ...t, target, status };
       });
     case "SET_TASK_TYPE":
+      // habits have no due-date UI, so a leftover due must not linger invisibly
       return mapTask(state, A.taskId, (t) => A.kind === "habit"
-        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true }
+        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true, due: null, duePromoted: false }
         : { ...t, type: "todo", status: "todo" });
     case "TOGGLE_RECURRING":
       return mapTask(state, A.taskId, (t) => ({ ...t, recurring: !t.recurring }));
@@ -287,6 +335,9 @@ function applyAction(state, action) {
       return mapTask(state, A.taskId, (t) => ({ ...t, text: A.text }));
     case "EDIT_TASK_NOTE":
       return mapTask(state, A.taskId, (t) => ({ ...t, note: A.note }));
+    case "SET_DUE":
+      // a fresh date re-arms auto-promotion (duePromoted back to false)
+      return mapTask(state, A.taskId, (t) => ({ ...t, due: cleanDue(A.due), duePromoted: false }));
 
     case "SET_BIG": {
       // assign this task to big slot A.n; clear any other task holding it
@@ -314,7 +365,7 @@ function applyAction(state, action) {
     }
 
     case "ADD_TASK": {
-      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: A.taskType === "habit" };
+      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: A.taskType === "habit", due: cleanDue(A.due), duePromoted: false };
       return { ...state, projects: state.projects.map(p =>
         p.id === A.projectId ? { ...p, tasks: A.toTop ? [t, ...p.tasks] : [...p.tasks, t] } : p) };
     }
@@ -380,7 +431,7 @@ function applyAction(state, action) {
     case "ADD_PROJECT": {
       const used = state.projects.map(p => p.accent);
       const accent = A.accent || (window.ACCENTS.find(a => !used.includes(a.val)) || window.ACCENTS[state.projects.length % window.ACCENTS.length]).val;
-      const tasks = (A.tasks || []).map(t => ({ id: uid(), text: t.text || String(t), status: "todo", note: t.note || "", big: null, lane: t.lane || "active", subtasks: t.subtasks || [] }));
+      const tasks = (A.tasks || []).map(t => ({ id: uid(), text: t.text || String(t), status: "todo", note: t.note || "", big: null, lane: t.queue ? "queue" : (t.lane || "active"), subtasks: t.subtasks || [], due: cleanDue(t.due), duePromoted: false }));
       return { ...state, projects: [...state.projects, { id: uid(), name: A.name || "New Project", accent, queueOpen: false, tasks }] };
     }
     case "RENAME_PROJECT":
@@ -449,7 +500,9 @@ function applyAction(state, action) {
         .filter(t => t.recurring || t.status !== "done")
         .map(t => {
           if (t.type === "habit") return t.recurring ? { ...t, days: reset7, status: "todo" } : t;
-          if (t.recurring) return { ...t, status: "todo", subtasks: Array.isArray(t.subtasks) ? t.subtasks.map(s => ({ ...s, done: false })) : t.subtasks };
+          // a recurring to-do restarts each week, so a fixed calendar date would
+          // just go stale and read "late" forever — drop it with the reset
+          if (t.recurring) return { ...t, status: "todo", due: null, duePromoted: false, subtasks: Array.isArray(t.subtasks) ? t.subtasks.map(s => ({ ...s, done: false })) : t.subtasks };
           return { ...t, subtasks: Array.isArray(t.subtasks) ? t.subtasks.filter(s => !s.done) : t.subtasks };
         })
       }));
@@ -476,7 +529,7 @@ function applyAction(state, action) {
           const proj = resolveProject(s, act.project);
           if (proj) {
             const newId = uid();
-            s = reducer(s, { type: "ADD_TASK", id: newId, projectId: proj.id, text: act.text, note: act.note, lane: act.queue ? "queue" : "active", taskType: act.habit ? "habit" : "todo", subtasks: (act.subtasks || []).map(x => ({ id: uid(), text: x, done: false })) });
+            s = reducer(s, { type: "ADD_TASK", id: newId, projectId: proj.id, text: act.text, note: act.note, lane: act.queue ? "queue" : "active", taskType: act.habit ? "habit" : "todo", due: act.due || null, subtasks: (act.subtasks || []).map(x => ({ id: uid(), text: x, done: false })) });
             if (act.big && act.big >= 1 && act.big <= 3) s = reducer(s, { type: "SET_BIG", taskId: newId, n: act.big });
           }
         }
@@ -516,6 +569,15 @@ function useReducerStore(userId) {
   useEffect(() => {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
   }, [state]);
+
+  // A tab left open across midnight would otherwise never re-run promoteDue
+  // (it only fires inside the reducer). The unknown action is a no-op for
+  // applyAction, so when nothing qualifies the same state object comes back
+  // and React skips the render.
+  useEffect(() => {
+    const t = setInterval(() => dispatch({ type: "DUE_TICK" }), 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [dispatch]);
 
   // ---- remote sync (only when authed) ----
   // Pull on auth-ready and on tab refocus. First-load migration: if the
@@ -599,4 +661,4 @@ function selProgress(state) {
   return { done, total };
 }
 
-Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, uid, quarterIsDue, quarterEndDate });
+Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS });

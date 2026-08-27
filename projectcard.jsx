@@ -114,10 +114,27 @@ function SubList({ task }) {
   );
 }
 
+// Small date pill on a task row. Muted normally, amber inside 3 days,
+// clay when overdue. Click opens the row's date editor.
+function DueChip({ task, onEdit }) {
+  const d = window.daysUntil(task.due);
+  const label = new Date(task.due + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const cls = d < 0 ? " overdue" : d <= 3 ? " soon" : "";
+  const rel = d < 0 ? "late" : d === 0 ? "today" : d <= window.DUE_LEAD_DAYS ? `${d}d` : null;
+  return (
+    <button className={"due-chip" + cls}
+      title={`Due ${label}${rel ? " (" + (d < 0 ? "overdue" : rel === "today" ? "due today" : "in " + rel) + ")" : ""} — click to change`}
+      onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+      {label}{rel ? " · " + rel : ""}
+    </button>
+  );
+}
+
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { dispatch } = window.useFocusStore();
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(false);
+  const [showDue, setShowDue] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   // One-shot flag: when true, the note InlineText mounts already in editing
   // mode so the cursor lands inside it. Cleared after a render so future
@@ -164,7 +181,18 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
             {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
               className={"task-text st-text-" + task.status} placeholder="Task…" />
+            {!isHabit && task.due && <DueChip task={task} onEdit={() => setShowDue(s => !s)} />}
           </div>
+
+          {showDue && (
+            <div className="due-edit" onClick={(e) => e.stopPropagation()}>
+              <input type="date" className="due-input" value={task.due || ""} aria-label="Due date"
+                onChange={(e) => dispatch({ type: "SET_DUE", taskId: task.id, due: e.target.value })} />
+              {lane === "queue" && <span className="due-hint">surfaces {window.DUE_LEAD_DAYS} days out</span>}
+              {task.due && <button onClick={() => { dispatch({ type: "SET_DUE", taskId: task.id, due: null }); setShowDue(false); }}>clear</button>}
+              <button onClick={() => setShowDue(false)}>done</button>
+            </div>
+          )}
 
           {showNote || task.note ? (
             <window.InlineText value={task.note} onCommit={(t) => { dispatch({ type: "EDIT_TASK_NOTE", taskId: task.id, note: t }); if (!t) setShowNote(false); }}
@@ -198,6 +226,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
                 <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
                 <button onClick={() => { dispatch({ type: "TOGGLE_RECURRING", taskId: task.id }); closeMenu(); }}>{task.recurring ? "Don’t repeat weekly" : "Repeat weekly"}</button>
                 {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); closeMenu(); }}>Add steps</button>}
+                {!isHabit && <button onClick={() => { setShowDue(true); closeMenu(); }}>{task.due ? "Change due date" : "Set due date"}</button>}
                 <button onClick={() => { dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }); closeMenu(); }}>
                   {lane === "active" ? "Send to queue" : "Move to active"}
                 </button>

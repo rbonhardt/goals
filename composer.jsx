@@ -10,6 +10,7 @@ async function focusAI({ input, state, dispatch, planning }) {
 - mark a recurring task as a habit with "habit": true (it gets a daily check-off tracker).`
     : "";
   const sys = `You convert a person's natural language into structured actions for their weekly planner.
+Today is ${window.todayISO()}.
 Existing projects:
 ${projectList}
 
@@ -17,13 +18,14 @@ Return ONLY valid JSON, no prose, shaped exactly:
 {"actions":[ ... ],"reply":"one short friendly sentence"}
 
 Action kinds:
-- {"kind":"add_task","project":"<existing project name or id>","text":"...","note":"optional","queue":false,"subtasks":["optional step"],"big":null,"habit":false}
-- {"kind":"add_project","name":"...","tasks":[{"text":"...","note":"optional","queue":false}]}
+- {"kind":"add_task","project":"<existing project name or id>","text":"...","note":"optional","queue":false,"subtasks":["optional step"],"big":null,"habit":false,"due":null}
+- {"kind":"add_project","name":"...","tasks":[{"text":"...","note":"optional","queue":false,"due":null}]}
 - {"kind":"add_scheduled","text":"...","note":"optional","cadence":"weekly" or "monthly","day":0-6 (weekly: 0=Mon … 6=Sun),"date":1-31 (monthly: day of month)}
 
 Rules:
 - Match projects loosely by name (e.g. "motion" -> Motion). If a project clearly doesn't exist, create it with add_project.
 - "queue" / "later" / "someday" => queue:true. Otherwise queue:false (active this week).
+- A deadline ("by Friday", "due Nov 6") => "due":"YYYY-MM-DD". If the due date is more than 10 days away, also set queue:true — the planner auto-surfaces it 10 days before it's due.
 - Nested or "sub" items become subtasks. Recurring "every day / X a day / routine" tasks => habit:true.
 - A recurring commitment tied to a specific day ("every Sunday", "on the 1st of each month") => add_scheduled, not a task.
 - Keep task text concise. Don't invent tasks the user didn't mention.${planNote}
