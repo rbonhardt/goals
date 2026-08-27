@@ -129,6 +129,8 @@ function App({ session }) {
 
         <window.Scheduled />
 
+        <window.MeetingInbox />
+
         <div className="projects">
           {state.projects.map(p => <window.ProjectCard key={p.id} project={p} />)}
           <div className="pcard pcard-add">
