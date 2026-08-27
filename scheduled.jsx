@@ -130,6 +130,7 @@ function SchedItem({ item }) {
 
 function Scheduled() {
   const { state, dispatch } = window.useFocusStore();
+  const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.schedCollapsed");
   const items = state.scheduled || [];
   const attention = items.filter(it => {
     const s = schedInfo(it, state).status;
@@ -139,17 +140,21 @@ function Scheduled() {
   return (
     <section className="sched">
       <div className="sched-head">
+        <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={toggleCollapsed}
+          title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
         <span className="eyebrow">Scheduled</span>
         <span className="sched-sub">recurring — don't let these slip</span>
         <span className={"sched-count" + (attention ? " hot" : "")}>
           {attention ? attention + " need" + (attention === 1 ? "s" : "") + " doing" : "all clear ✓"}
         </span>
       </div>
-      <div className="sched-list">
-        {items.map(it => <SchedItem key={it.id} item={it} />)}
-        <window.AddRow className="sched-add" placeholder="Add a scheduled task…"
-          onAdd={(t) => dispatch({ type: "ADD_SCHEDULED", text: t })} />
-      </div>
+      {!collapsed && (
+        <div className="sched-list">
+          {items.map(it => <SchedItem key={it.id} item={it} />)}
+          <window.AddRow className="sched-add" placeholder="Add a scheduled task…"
+            onAdd={(t) => dispatch({ type: "ADD_SCHEDULED", text: t })} />
+        </div>
+      )}
     </section>
   );
 }

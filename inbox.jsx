@@ -21,6 +21,7 @@ function MeetingInbox() {
   const [lane, setLane] = React.useState("queue"); // "active" | "queue"
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.inboxCollapsed");
 
   const refresh = React.useCallback(async () => {
     const { data, error } = await window.supaClient
@@ -99,11 +100,14 @@ function MeetingInbox() {
   return (
     <section className="minbox">
       <div className="sched-head">
+        <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={toggleCollapsed}
+          title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
         <span className="eyebrow">Meeting Inbox</span>
         <span className="sched-sub">to-dos pulled from Granola — file or flush</span>
         <span className="minbox-count">{items.length} item{items.length === 1 ? "" : "s"}</span>
       </div>
 
+      {!collapsed && <>
       <div className={"minbox-bar" + (sel.size ? " on" : "")}>
         <span className="minbox-bar-n">{sel.size ? sel.size + " selected →" : "select items, then choose where they go"}</span>
         <span className="minbox-lane">
@@ -144,6 +148,7 @@ function MeetingInbox() {
           ))}
         </div>
       ))}
+      </>}
     </section>
   );
 }

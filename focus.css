@@ -560,3 +560,8 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .minbox-note { font-family: var(--serif); font-style: italic; font-size: 12px; color: var(--ink-3); }
 .minbox-x { border: none; background: none; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .minbox-x:hover { color: oklch(0.55 0.13 30); background: oklch(0.955 0.030 42); }
+
+/* ---- section collapse caret (Scheduled + Meeting Inbox) ---- */
+.sec-caret { border: none; background: none; cursor: pointer; color: var(--ink-3); font-size: 12px; line-height: 1; padding: 0 2px; align-self: center; transition: transform .15s, color .15s; }
+.sec-caret.open { transform: rotate(90deg); }
+.sec-caret:hover { color: var(--ink); }

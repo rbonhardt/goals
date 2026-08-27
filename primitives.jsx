@@ -216,4 +216,18 @@ function computeDropIndex(container, clientY) {
   return rows.length;
 }
 
-Object.assign(window, { StatusToggle, InlineText, AddRow, computeDropIndex });
+// useCollapsePref — per-device collapsed/expanded state for a section,
+// remembered in localStorage (a view preference, so it deliberately does
+// NOT sync through the app_state blob like quarterCollapsed does).
+function useCollapsePref(key) {
+  const [collapsed, setCollapsed] = React.useState(() => {
+    try { return localStorage.getItem(key) === "1"; } catch { return false; }
+  });
+  const toggle = React.useCallback(() => setCollapsed((c) => {
+    try { localStorage.setItem(key, c ? "0" : "1"); } catch {}
+    return !c;
+  }), [key]);
+  return [collapsed, toggle];
+}
+
+Object.assign(window, { StatusToggle, InlineText, AddRow, computeDropIndex, useCollapsePref });
