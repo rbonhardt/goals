@@ -42,7 +42,8 @@ function BigThree() {
               data-row
               className={"b3-row" + (dragId === t.id ? " dragging" : "") + (overIdx === visualIdx ? " drop-before" : "")}
               draggable
-              onDragStart={(e) => { setDragId(t.id); e.dataTransfer.effectAllowed = "move"; }}
+              onDragStart={(e) => { window.SUBDRAG = null; window.DRAG = { taskId: null }; window.DRAGCARD = null;
+                setDragId(t.id); e.dataTransfer.effectAllowed = "move"; }}
               onDragOver={(e) => { e.preventDefault(); setOverIdx(visualIdx); }}
               onDrop={(e) => { e.preventDefault(); onDrop(visualIdx); }}
               onDragEnd={() => { setDragId(null); setOverIdx(null); }}>

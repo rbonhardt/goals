@@ -101,8 +101,9 @@ function HabitDays({ task, accent }) {
   );
 }
 
-// Subtask list with drag-to-reorder. Drags are scoped to the parent task —
-// a step can be re-ordered among its siblings but not dragged into another task.
+// Subtask list with drag-to-reorder. A step can be re-ordered among its
+// siblings or dragged into any other task's step list — see Lane for the
+// case where the destination task has no open list to aim at.
 function SubList({ task }) {
   const { dispatch } = window.useFocusStore();
   // drop : null | insertion index (where the dragged step would land)
@@ -111,40 +112,51 @@ function SubList({ task }) {
 
   function startDrag(e, subId) {
     e.stopPropagation(); // don't also start the parent task's drag
+    // A drag that never fired dragend (source unmounted mid-drag, say) can
+    // leave a stale global behind. Every drag start clears the other two so
+    // only one kind of drag is ever live.
+    window.DRAG = { taskId: null };
+    window.DRAGCARD = null;
     window.SUBDRAG = { taskId: task.id, subId };
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", subId); } catch (x) {}
   }
 
+  // First row whose midpoint sits below the cursor. Midpoints (rather than
+  // row bounds) mean the 4px gaps between rows, and the space above the first
+  // row, still resolve to a sensible index instead of falling through to
+  // "append at the end".
   function computeDrop(e) {
-    const d = window.SUBDRAG;
-    if (!d || d.taskId !== task.id) return null;
+    if (!window.SUBDRAG) return null;
     const rows = [...ref.current.querySelectorAll(":scope > [data-sub]")];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i].getBoundingClientRect();
-      if (e.clientY < r.top || e.clientY > r.bottom) continue;
-      return (e.clientY - r.top) / r.height < 0.5 ? i : i + 1;
+      if (e.clientY < r.top + r.height / 2) return i;
     }
     return rows.length;
   }
 
   function onDragOver(e) {
-    const d = window.SUBDRAG;
-    if (!d || d.taskId !== task.id) return; // ignore drags from elsewhere
+    if (!window.SUBDRAG) return; // not a step drag — let the lane have it
     e.preventDefault();
-    e.stopPropagation();
+    // Deliberately not stopping propagation: the Lane needs to see this to
+    // drop its own row highlight (it bails on anything inside a .subs-list).
     setDrop(computeDrop(e));
   }
 
   function onDrop(e) {
     const d = window.SUBDRAG;
-    if (!d || d.taskId !== task.id) return;
+    if (!d) return;
     e.preventDefault();
     e.stopPropagation();
-    const idx = drop != null ? drop : computeDrop(e);
+    // recompute from the drop event — the cursor may have moved since the
+    // last dragover, and stale hover state must never pick the slot
+    const idx = computeDrop(e);
     setDrop(null);
-    if (idx != null) dispatch({ type: "MOVE_SUB", taskId: task.id, subId: d.subId, toIndex: idx });
     window.SUBDRAG = null;
+    if (idx == null) return;
+    if (d.taskId === task.id) dispatch({ type: "MOVE_SUB", taskId: task.id, subId: d.subId, toIndex: idx });
+    else dispatch({ type: "MOVE_SUB_TO_TASK", fromTaskId: d.taskId, toTaskId: task.id, subId: d.subId, toIndex: idx });
   }
 
   return (
@@ -222,6 +234,8 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
   React.useEffect(() => { if (autoEditNote) setAutoEditNote(false); }, [autoEditNote]);
 
   function startDrag(e) {
+    window.SUBDRAG = null; // never let a stale step drag ride along
+    window.DRAGCARD = null;
     window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", task.id); } catch (x) {}
@@ -333,7 +347,29 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
     return false;
   }
 
+  // A step dragged out of one task can be dropped straight onto another task
+  // row — that appends it as the target's last step. This is the only route
+  // into a task whose step list is collapsed or still empty.
+  function computeSubDrop(e) {
+    const d = window.SUBDRAG;
+    // An open step list handles its own drops — returning null here also
+    // clears this lane's row highlight as the cursor moves into one.
+    if (e.target && e.target.closest && e.target.closest(".subs-list")) return null;
+    const rows = [...ref.current.querySelectorAll(":scope > [data-row]")];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (e.clientY < r.top || e.clientY > r.bottom) continue;
+      const rowTaskId = rows[i].dataset.taskId;
+      if (!rowTaskId || rowTaskId === d.taskId) return null; // placeholder, or its own parent
+      const target = tasks.find(t => t.id === rowTaskId);
+      if (!target || target.type === "habit") return null; // habits don't show steps
+      return { type: "into", taskId: rowTaskId };
+    }
+    return null;
+  }
+
   function computeDrop(e) {
+    if (window.SUBDRAG) return computeSubDrop(e);
     const d = window.DRAG;
     if (!d || !d.taskId) return null;
     const rows = [...ref.current.querySelectorAll(":scope > [data-row]")];
@@ -357,23 +393,43 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       // Tasks with their own subtasks can't be nested — fall back to an
       // insertion line so their steps never get silently dropped.
       if (draggedHasSubtasks()) return { type: "between", index: rel < 0.5 ? i : i + 1 };
+      // Habits never show steps, so nesting into one would hide the task.
+      const target = tasks.find(t => t.id === rowTaskId);
+      if (target && target.type === "habit") return { type: "between", index: rel < 0.5 ? i : i + 1 };
       return { type: "into", taskId: rowTaskId };
     }
+    // Above the first row (the lane's top padding, or the 3px the indicator
+    // line is drawn above it) means "insert first", not "append last".
+    if (rows.length && e.clientY < rows[0].getBoundingClientRect().top)
+      return { type: "between", index: 0 };
     // Below all rows
     return { type: "between", index: rows.length };
   }
 
   function onDragOver(e) {
-    if (!window.DRAG || !window.DRAG.taskId) return;
-    e.preventDefault();
-    setDrop(computeDrop(e));
+    if (!window.SUBDRAG && (!window.DRAG || !window.DRAG.taskId)) return;
+    const current = computeDrop(e);
+    // Only claim the drop when there is somewhere to put it, so a habit row
+    // (or a step list's own territory) shows a "no drop" cursor rather than
+    // accepting the drag and then doing nothing.
+    if (current) e.preventDefault();
+    setDrop(current);
   }
 
   function onDrop(e) {
     e.preventDefault();
-    const d = window.DRAG;
-    const current = drop || computeDrop(e);
+    const sub = window.SUBDRAG;
+    // Recompute rather than trust the hover state: the cursor may have moved
+    // since the last dragover, and stale state must never pick the target.
+    const current = computeDrop(e);
     setDrop(null);
+    if (sub) {
+      window.SUBDRAG = null;
+      if (current && current.type === "into" && current.taskId !== sub.taskId)
+        dispatch({ type: "MOVE_SUB_TO_TASK", fromTaskId: sub.taskId, toTaskId: current.taskId, subId: sub.subId, toIndex: null });
+      return;
+    }
+    const d = window.DRAG;
     if (!d || !d.taskId || !current) { window.DRAG = { taskId: null }; return; }
 
     if (current.type === "into" && current.taskId && current.taskId !== d.taskId) {
@@ -385,8 +441,11 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
         for (const t of p.tasks) if (t.id === d.taskId) { dragged = t; break; }
         if (dragged) break;
       }
-      // Never nest a task that has subtasks — that would discard its steps.
-      if (dragged && !(Array.isArray(dragged.subtasks) && dragged.subtasks.length > 0)) {
+      // Never nest a task that has subtasks — that would discard its steps —
+      // and never nest into a habit, which never renders steps at all.
+      const target = tasks.find(t => t.id === current.taskId);
+      if (dragged && target && target.type !== "habit"
+          && !(Array.isArray(dragged.subtasks) && dragged.subtasks.length > 0)) {
         dispatch({ type: "ADD_SUB", taskId: current.taskId, text: dragged.text });
         dispatch({ type: "DELETE_TASK", taskId: d.taskId });
       }
@@ -442,6 +501,7 @@ function ProjectCard({ project }) {
 
   function startCardDrag(e) {
     if (e.target.closest(".task") || e.target.closest("input") || e.target.closest("textarea")) return;
+    window.SUBDRAG = null; window.DRAG = { taskId: null };
     window.DRAGCARD = project.id; e.dataTransfer.effectAllowed = "move";
   }
 

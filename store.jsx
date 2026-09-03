@@ -424,6 +424,28 @@ function applyAction(state, action) {
         subs.splice(idx, 0, moved);
         return { ...t, subtasks: subs };
       });
+    case "MOVE_SUB_TO_TASK": {
+      // move a step out of one task and into another (any project), landing at
+      // A.toIndex in the destination list (null = append)
+      if (A.fromTaskId === A.toTaskId)
+        return applyAction(state, { type: "MOVE_SUB", taskId: A.toTaskId, subId: A.subId, toIndex: A.toIndex });
+      const { task: fromTask } = findTask(state, A.fromTaskId);
+      const { task: toTask } = findTask(state, A.toTaskId);
+      // bail before the removal step if either end is missing — otherwise the
+      // step would be deleted with nowhere to land. Habits never render their
+      // steps, so landing one there would look like data loss.
+      if (!fromTask || !toTask || toTask.type === "habit") return state;
+      const moved = fromTask.subtasks.find(s => s.id === A.subId);
+      if (!moved) return state;
+      let s = mapTask(state, A.fromTaskId, (t) => ({ ...t, subtasks: t.subtasks.filter(x => x.id !== A.subId) }));
+      s = mapTask(s, A.toTaskId, (t) => {
+        const subs = t.subtasks.slice();
+        const idx = Math.max(0, Math.min(A.toIndex == null ? subs.length : A.toIndex, subs.length));
+        subs.splice(idx, 0, moved);
+        return { ...t, subtasks: subs };
+      });
+      return s;
+    }
 
     // ---- projects ----
     case "TOGGLE_QUEUE":
