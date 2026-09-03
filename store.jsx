@@ -200,11 +200,21 @@ function stamp(item, done) {
   return item;
 }
 
+// 0 when the task is due today or already overdue, 1 otherwise. Habits have
+// no due date, and a done task never counts as pressing.
+function dueRank(t) {
+  if (!t.due || t.type === "habit" || t.status === "done") return 1;
+  const d = daysUntil(t.due);
+  return Number.isFinite(d) && d <= 0 ? 0 : 1;
+}
 function cmpTasks(a, b) {
   const da = a.status === "done" ? 1 : 0, db = b.status === "done" ? 1 : 0;
   if (da !== db) return da - db;                                 // unfinished first
-  return da ? (a.completedAt || 0) - (b.completedAt || 0)        // done pile: oldest → newest
-            : (a.big || 9) - (b.big || 9);                       // this week: Big Three first
+  if (da) return (a.completedAt || 0) - (b.completedAt || 0);    // done pile: oldest → newest
+  const ra = dueRank(a), rb = dueRank(b);
+  if (ra !== rb) return ra - rb;                                 // due today / overdue pop to the top
+  if (ra === 0 && a.due !== b.due) return a.due < b.due ? -1 : 1; // most overdue first
+  return (a.big || 9) - (b.big || 9);                            // then Big Three
 }
 function cmpSubs(a, b) {
   const da = a.done ? 1 : 0, db = b.done ? 1 : 0;
