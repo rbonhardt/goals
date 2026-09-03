@@ -169,7 +169,7 @@ function SubList({ task }) {
           key={s.id} data-sub draggable
           onDragStart={(e) => startDrag(e, s.id)}
           onDragEnd={() => { window.SUBDRAG = null; setDrop(null); }}>
-          <span className="sub-grip" title="Drag to reorder">⋮⋮</span>
+          <span className="sub-grip" title="Drag to reorder, move to another task, or pull out as its own task">⋮⋮</span>
           <button className={"sub-box" + (s.done ? " on" : "")} onClick={() => dispatch({ type: "TOGGLE_SUB", taskId: task.id, subId: s.id })} />
           <window.InlineText value={s.text} onCommit={(t) => { if (t) dispatch({ type: "EDIT_SUB", taskId: task.id, subId: s.id, text: t }); else dispatch({ type: "DEL_SUB", taskId: task.id, subId: s.id }); }}
             className={"sub-text" + (s.done ? " done" : "")} />
@@ -347,9 +347,11 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
     return false;
   }
 
-  // A step dragged out of one task can be dropped straight onto another task
-  // row — that appends it as the target's last step. This is the only route
-  // into a task whose step list is collapsed or still empty.
+  // A step dragged out of a task follows the same zones as a task drag:
+  // - middle of another task row → "into": appended as that task's last
+  //   step (the only route into a task whose list is collapsed or empty)
+  // - top/bottom edge of a row, the gaps, or empty lane space → "between":
+  //   the step is pulled out and becomes a task of its own at that slot
   function computeSubDrop(e) {
     const d = window.SUBDRAG;
     // An open step list handles its own drops — returning null here also
@@ -360,12 +362,21 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       const r = rows[i].getBoundingClientRect();
       if (e.clientY < r.top || e.clientY > r.bottom) continue;
       const rowTaskId = rows[i].dataset.taskId;
-      if (!rowTaskId || rowTaskId === d.taskId) return null; // placeholder, or its own parent
+      const rel = (e.clientY - r.top) / r.height;
+      // Empty-lane placeholder rows don't have a taskId
+      if (!rowTaskId) return { type: "between", index: i };
+      if (rel < 0.3) return { type: "between", index: i };
+      if (rel > 0.7) return { type: "between", index: i + 1 };
       const target = tasks.find(t => t.id === rowTaskId);
-      if (!target || target.type === "habit") return null; // habits don't show steps
+      // Its own parent can't take it back, and habits never show steps —
+      // fall back to an insertion line rather than a dead zone.
+      if (rowTaskId === d.taskId || !target || target.type === "habit")
+        return { type: "between", index: rel < 0.5 ? i : i + 1 };
       return { type: "into", taskId: rowTaskId };
     }
-    return null;
+    if (rows.length && e.clientY < rows[0].getBoundingClientRect().top)
+      return { type: "between", index: 0 };
+    return { type: "between", index: rows.length };
   }
 
   function computeDrop(e) {
@@ -425,8 +436,11 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
     setDrop(null);
     if (sub) {
       window.SUBDRAG = null;
-      if (current && current.type === "into" && current.taskId !== sub.taskId)
+      if (!current) return;
+      if (current.type === "into" && current.taskId !== sub.taskId)
         dispatch({ type: "MOVE_SUB_TO_TASK", fromTaskId: sub.taskId, toTaskId: current.taskId, subId: sub.subId, toIndex: null });
+      else if (current.type === "between")
+        dispatch({ type: "PROMOTE_SUB_TO_TASK", fromTaskId: sub.taskId, subId: sub.subId, toProject: project.id, toLane: lane, toIndex: current.index });
       return;
     }
     const d = window.DRAG;

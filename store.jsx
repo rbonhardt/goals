@@ -446,6 +446,27 @@ function applyAction(state, action) {
       });
       return s;
     }
+    case "PROMOTE_SUB_TO_TASK": {
+      // pull a step out of its task and make it a task of its own, landing at
+      // A.toIndex in {toProject, toLane} (null = append). A done step becomes
+      // a done task so it settles the same way it did as a step.
+      const { task: fromTask } = findTask(state, A.fromTaskId);
+      const sub = fromTask && fromTask.subtasks.find(x => x.id === A.subId);
+      // bail before removal if there is nowhere to land — otherwise the step
+      // would vanish
+      if (!sub || !state.projects.some(p => p.id === A.toProject)) return state;
+      const t = { id: uid(), text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false };
+      const s = mapTask(state, A.fromTaskId, (x) => ({ ...x, subtasks: x.subtasks.filter(y => y.id !== A.subId) }));
+      return { ...s, projects: s.projects.map(p => {
+        if (p.id !== A.toProject) return p;
+        // same rebuild as MOVE_TASK: splice into the target lane, keep the rest
+        const sameLane = p.tasks.filter(x => x.lane === A.toLane);
+        const otherLane = p.tasks.filter(x => x.lane !== A.toLane);
+        const idx = Math.max(0, Math.min(A.toIndex == null ? sameLane.length : A.toIndex, sameLane.length));
+        sameLane.splice(idx, 0, t);
+        return { ...p, tasks: [...sameLane, ...otherLane] };
+      }) };
+    }
 
     // ---- projects ----
     case "TOGGLE_QUEUE":
