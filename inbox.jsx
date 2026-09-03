@@ -5,8 +5,12 @@
 // app_state blob on purpose: the pipeline writes the table, the
 // app only ever flips row status, so neither can clobber the
 // other's data. Select items → send to a project ("This Week"
-// = active lane, "Queue" = queue lane) or dismiss with ✕.
+// = active lane, "Queue" = queue lane) either as separate tasks
+// or grouped into one named task (each item becomes a step), or
+// dismiss with ✕.
 // ============================================================
+
+const inboxUid = () => Math.random().toString(36).slice(2, 9);
 
 function inboxFmtDate(iso) {
   if (!iso) return "";
@@ -19,6 +23,8 @@ function MeetingInbox() {
   const [items, setItems] = React.useState([]);
   const [sel, setSel] = React.useState(() => new Set());
   const [lane, setLane] = React.useState("queue"); // "active" | "queue"
+  const [mode, setMode] = React.useState("each"); // "each" = one task per item | "one" = group into a single task
+  const [name, setName] = React.useState("");     // task name when grouping
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.inboxCollapsed");
@@ -78,19 +84,34 @@ function MeetingInbox() {
     finally { setBusy(false); }
   }
 
+  const grouping = mode === "one";
+  const canMove = sel.size > 0 && !busy && (!grouping || name.trim().length > 0);
+
   async function moveTo(projectId) {
     const ids = [...sel];
     if (!ids.length || busy) return;
+    if (grouping && !name.trim()) { setErr("Give the grouped task a name first."); return; }
     setBusy(true); setErr(null);
     try {
       const chosen = items.filter((r) => ids.includes(r.id));
-      chosen.forEach((r) => {
-        const note = [r.owner, r.note].filter(Boolean).join(" · ");
-        dispatch({ type: "ADD_TASK", projectId, text: r.text, note, lane });
-      });
+      if (grouping) {
+        // one task; every selected to-do becomes a step under it
+        const subtasks = chosen.map((r) => {
+          const extra = [r.owner, r.note].filter(Boolean).join(" · ");
+          return { id: inboxUid(), text: extra ? r.text + " (" + extra + ")" : r.text, done: false };
+        });
+        const meetings = [...new Set(chosen.map((r) => r.meeting_title).filter(Boolean))];
+        dispatch({ type: "ADD_TASK", projectId, text: name.trim(), note: meetings.join(" · "), lane, subtasks });
+      } else {
+        chosen.forEach((r) => {
+          const note = [r.owner, r.note].filter(Boolean).join(" · ");
+          dispatch({ type: "ADD_TASK", projectId, text: r.text, note, lane });
+        });
+      }
       await setStatus(ids, "moved");
       setItems((cur) => cur.filter((r) => !ids.includes(r.id)));
       setSel(new Set());
+      setName("");
     } catch (e) { setErr(e.message || "Moved into the app, but couldn't update the inbox table."); }
     finally { setBusy(false); }
   }
@@ -114,8 +135,16 @@ function MeetingInbox() {
           <button className={lane === "active" ? "on" : ""} onClick={() => setLane("active")}>This Week</button>
           <button className={lane === "queue" ? "on" : ""} onClick={() => setLane("queue")}>Queue</button>
         </span>
+        <span className="minbox-lane" title="Separate: one task per item. One task: all items become steps of a single task.">
+          <button className={mode === "each" ? "on" : ""} onClick={() => setMode("each")}>Separate tasks</button>
+          <button className={mode === "one" ? "on" : ""} onClick={() => setMode("one")}>One task</button>
+        </span>
+        {grouping && (
+          <input className="minbox-name" type="text" value={name} placeholder="Name the task…"
+            onChange={(e) => setName(e.target.value)} autoFocus />
+        )}
         {state.projects.map((p) => (
-          <button key={p.id} className="minbox-proj" disabled={!sel.size || busy}
+          <button key={p.id} className="minbox-proj" disabled={!canMove}
             style={{ borderColor: p.accent, color: p.accent }}
             onClick={() => moveTo(p.id)}>{p.name}</button>
         ))}
