@@ -182,12 +182,14 @@ function SubList({ task }) {
 }
 
 // Small date pill on a task row. Muted normally, amber inside 3 days,
-// clay when overdue. Click opens the row's date editor.
+// clay when due today or overdue. Done tasks always stay muted gray, no
+// matter the date. Click opens the row's date editor.
 function DueChip({ task, onEdit, chipRef }) {
   const d = window.daysUntil(task.due);
   const label = new Date(task.due + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const cls = d < 0 ? " overdue" : d <= 3 ? " soon" : "";
-  const rel = d < 0 ? "late" : d === 0 ? "today" : d <= window.DUE_LEAD_DAYS ? `${d}d` : null;
+  const isDone = task.status === "done";
+  const cls = isDone ? " is-done" : d <= 0 ? " overdue" : d <= 3 ? " soon" : "";
+  const rel = isDone ? null : d < 0 ? "late" : d === 0 ? "today" : d <= window.DUE_LEAD_DAYS ? `${d}d` : null;
   return (
     <button className={"due-chip" + cls} ref={chipRef}
       title={`Due ${label}${rel ? " (" + (d < 0 ? "overdue" : rel === "today" ? "due today" : "in " + rel) + ")" : ""} — click to change`}
