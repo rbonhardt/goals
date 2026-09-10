@@ -129,6 +129,7 @@ function seed() {
       ]},
     ],
     scheduled: defaultScheduled(),
+    today: { date: todayISO(), items: [] },
     history: [],
   };
 }
@@ -148,6 +149,8 @@ function migrate(s) {
   // scheduled strip added later: seed the defaults only when the field has
   // never existed (an emptied list stays empty)
   if (!Array.isArray(s.scheduled)) s.scheduled = defaultScheduled();
+  // Today list added later: an empty list dated today
+  if (!s.today || !Array.isArray(s.today.items)) s.today = { date: todayISO(), items: [] };
   s.scheduled.forEach(it => {
     if (!it.cadence) it.cadence = "weekly";
     if (it.day == null) it.day = 6;
@@ -164,7 +167,8 @@ function migrate(s) {
     t.due = cleanDue(t.due);
     if (t.duePromoted === undefined) t.duePromoted = false;
   }));
-  return sinkDone(s);
+  // load and every server pull come through here: roll the day over on fresh data
+  return rollToday(sinkDone(s));
 }
 
 // ============================================================
@@ -253,6 +257,63 @@ function promoteDue(state) {
   });
   return moved ? { ...state, projects } : state;
 }
+// ============================================================
+// Today — a hand-picked list of tasks and steps for the day
+// ============================================================
+// state.today = { date: "YYYY-MM-DD", items: [{ taskId, subId|null }] }.
+// Items are *references*: the row on screen is always the live task or step,
+// so a check-off or an edit in either place shows in both. Array order is the
+// day's order; the first three rows are numbered 1-3 (the day's big three).
+const todayKey = (taskId, subId) => taskId + ":" + (subId || "");
+// Monday-first weekday index (matches habit.days) for a YYYY-MM-DD date.
+function weekdayIdx(iso) { return (new Date(iso + "T00:00:00").getDay() + 6) % 7; }
+// Finished for the purposes of the Today list. A habit counts as finished
+// on a given date when that date's day-mark is set.
+function todayItemDone(task, sub, dateISO) {
+  if (sub) return !!sub.done;
+  if (task.type === "habit") return !!(task.days || [])[weekdayIdx(dateISO)];
+  return task.status === "done";
+}
+// Resolve one item to its live task/step, or null when either is gone.
+function resolveTodayItem(state, it) {
+  if (!it || !it.taskId) return null;
+  const { project, task } = findTask(state, it.taskId);
+  if (!task) return null;
+  if (!it.subId) return { project, task, sub: null };
+  // habits never show their steps, so a step of a habit cannot be picked
+  if (task.type === "habit") return null;
+  const sub = (task.subtasks || []).find(s => s.id === it.subId);
+  return sub ? { project, task, sub } : null;
+}
+// Drop references to things that no longer exist (prune), and when `roll` is
+// set and the date has moved on, drop whatever was finished — the unfinished
+// list carries over. Pruning runs inside sinkDone (every action, every
+// hydrate). Rolling runs only from a user action, a load, or a hydrate —
+// never from the hourly timer: a timer-only state change would push this
+// tab's whole planner to the server, and an idle tab's copy may be stale.
+function tidyToday(state, roll) {
+  const cur = state.today;
+  if (!cur || !Array.isArray(cur.items)) return { ...state, today: { date: todayISO(), items: [] } };
+  const now = todayISO();
+  const newDay = roll && cur.date !== now;
+  const seen = new Set();
+  const items = cur.items.filter(it => {
+    const r = resolveTodayItem(state, it);
+    if (!r) return false;
+    const k = todayKey(it.taskId, it.subId);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return !(newDay && todayItemDone(r.task, r.sub, cur.date));
+  });
+  if (!newDay && items.length === cur.items.length) return state;
+  // An empty list has nothing to roll, so leave its date alone — an idle tab
+  // sitting past midnight would otherwise mint a "changed" state every day
+  // and push a stale copy of the whole planner over newer edits elsewhere.
+  if (items.length === 0 && cur.items.length === 0) return state;
+  return { ...state, today: { date: newDay ? now : cur.date, items } };
+}
+const rollToday  = (state) => tidyToday(state, true);
+const pruneToday = (state) => tidyToday(state, false);
 
 // Applied after every action so the *stored* order always matches what's on
 // screen — drag-and-drop insert indexes are computed against the rendered list,
@@ -260,6 +321,7 @@ function promoteDue(state) {
 function sinkDone(state) {
   if (!state || !Array.isArray(state.projects)) return state;
   state = promoteDue(state);
+  state = pruneToday(state);
   absorbStamps(state); // must run before any stamp() below mints a new one
   let moved = false;
   const projects = state.projects.map(p => {
@@ -290,9 +352,17 @@ function findTask(state, taskId) {
   return {};
 }
 
-// every dispatch runs through sinkDone so completed items re-settle immediately
+// every dispatch runs through sinkDone so completed items re-settle immediately.
+// The day rolls over *before* the action lands: the first thing checked off
+// after midnight must count as today's work, not as yesterday's leftovers,
+// and a week-close must not resurrect what was finished yesterday. HYDRATE
+// replaces the state wholesale, so it rolls afterwards. The hourly DUE_TICK
+// never rolls (see tidyToday) — the next real action or tab refocus will.
 function reducer(state, action) {
-  return sinkDone(applyAction(state, action));
+  const timer = action.type === "DUE_TICK";
+  const base = action.type === "HYDRATE" || timer ? state : rollToday(state);
+  const next = sinkDone(applyAction(base, action));
+  return action.type === "HYDRATE" ? rollToday(next) : next;
 }
 
 function applyAction(state, action) {
@@ -319,8 +389,11 @@ function applyAction(state, action) {
       return mapTask(state, A.taskId, (t) => ({ ...t, status: next[t.status] }));
     }
     case "TOGGLE_HABIT_DAY":
+      // A.day may be "today": resolved here, at click time, so a tab left open
+      // across midnight marks the right day
       return mapTask(state, A.taskId, (t) => {
-        const days = t.days.slice(); days[A.day] = !days[A.day];
+        const day = A.day === "today" ? weekdayIdx(todayISO()) : A.day;
+        const days = t.days.slice(); days[day] = !days[day];
         const hit = days.filter(Boolean).length;
         const status = hit >= (t.target || 5) ? "done" : hit > 0 ? "doing" : "todo";
         return { ...t, days, status };
@@ -372,6 +445,41 @@ function applyAction(state, action) {
       let s = state;
       A.order.forEach((tid, i) => { s = mapTaskIn(s, tid, (t) => ({ ...t, big: i + 1 })); });
       return s;
+    }
+
+    // ---- today ----
+    case "TODAY_ADD": {
+      // append (or insert at A.toIndex) unless it is already on the list
+      if (!resolveTodayItem(state, A)) return state;
+      const k = todayKey(A.taskId, A.subId);
+      if (state.today.items.some(it => todayKey(it.taskId, it.subId) === k)) return state;
+      const items = state.today.items.slice();
+      const idx = A.toIndex == null ? items.length : Math.max(0, Math.min(A.toIndex, items.length));
+      items.splice(idx, 0, { taskId: A.taskId, subId: A.subId || null });
+      // an empty list keeps a stale date (see rollToday) — restart it now
+      return { ...state, today: { date: items.length === 1 ? todayISO() : state.today.date, items } };
+    }
+    case "TODAY_REMOVE": {
+      const k = todayKey(A.taskId, A.subId);
+      const items = state.today.items.filter(it => todayKey(it.taskId, it.subId) !== k);
+      return items.length === state.today.items.length ? state : { ...state, today: { ...state.today, items } };
+    }
+    case "TODAY_TOGGLE": {
+      const k = todayKey(A.taskId, A.subId);
+      const on = state.today.items.some(it => todayKey(it.taskId, it.subId) === k);
+      return applyAction(state, { ...A, type: on ? "TODAY_REMOVE" : "TODAY_ADD" });
+    }
+    case "TODAY_MOVE": {
+      // reorder within the list: A.key moves to A.toIndex (read against the
+      // rendered list, so a downward move loses one — same as MOVE_SUB)
+      const items = state.today.items.slice();
+      const from = items.findIndex(it => todayKey(it.taskId, it.subId) === A.key);
+      if (from < 0) return state;
+      const [moved] = items.splice(from, 1);
+      const want = A.toIndex == null ? items.length : A.toIndex > from ? A.toIndex - 1 : A.toIndex;
+      const idx = Math.max(0, Math.min(want, items.length));
+      items.splice(idx, 0, moved);
+      return { ...state, today: { ...state.today, items } };
     }
 
     case "ADD_TASK": {
@@ -434,6 +542,20 @@ function applyAction(state, action) {
         subs.splice(idx, 0, moved);
         return { ...t, subtasks: subs };
       });
+    case "NEST_TASK": {
+      // fold task A.taskId into A.intoTaskId as its last step. Steps are a
+      // flatter shape (id/text/done), so note/status/steps of the nested task
+      // are dropped — the caller refuses tasks that own steps. One action so
+      // a Today entry for the task follows it to the new step id.
+      const { task } = findTask(state, A.taskId);
+      const { task: into } = findTask(state, A.intoTaskId);
+      if (!task || !into || task.id === into.id || into.type === "habit"
+          || (Array.isArray(task.subtasks) && task.subtasks.length > 0)) return state;
+      const sub = { id: uid(), text: task.text, done: task.status === "done" };
+      let s = mapTask(state, into.id, (t) => ({ ...t, subtasks: [...t.subtasks, sub] }));
+      s = retargetToday(s, task.id, null, into.id, sub.id);
+      return { ...s, projects: s.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== task.id) })) };
+    }
     case "MOVE_SUB_TO_TASK": {
       // move a step out of one task and into another (any project), landing at
       // A.toIndex in the destination list (null = append)
@@ -454,7 +576,8 @@ function applyAction(state, action) {
         subs.splice(idx, 0, moved);
         return { ...t, subtasks: subs };
       });
-      return s;
+      // a step on the Today list stays on it after it changes parent
+      return retargetToday(s, A.fromTaskId, A.subId, A.toTaskId, A.subId);
     }
     case "PROMOTE_SUB_TO_TASK": {
       // pull a step out of its task and make it a task of its own, landing at
@@ -466,7 +589,8 @@ function applyAction(state, action) {
       // would vanish
       if (!sub || !state.projects.some(p => p.id === A.toProject)) return state;
       const t = { id: uid(), text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false };
-      const s = mapTask(state, A.fromTaskId, (x) => ({ ...x, subtasks: x.subtasks.filter(y => y.id !== A.subId) }));
+      // a step on the Today list stays on it as the task it became
+      const s = retargetToday(mapTask(state, A.fromTaskId, (x) => ({ ...x, subtasks: x.subtasks.filter(y => y.id !== A.subId) })), A.fromTaskId, A.subId, t.id, null);
       return { ...s, projects: s.projects.map(p => {
         if (p.id !== A.toProject) return p;
         // same rebuild as MOVE_TASK: splice into the target lane, keep the rest
@@ -599,6 +723,14 @@ function mapTask(state, taskId, fn) {
   return { ...state, projects: state.projects.map(p => ({ ...p, tasks: p.tasks.map(t => t.id === taskId ? fn(t) : t) })) };
 }
 const mapTaskIn = mapTask;
+// Point a Today item at a new (taskId, subId) — used when a step moves
+// between tasks or becomes a task of its own, so it keeps its place in the day.
+function retargetToday(state, taskId, subId, toTaskId, toSubId) {
+  const k = todayKey(taskId, subId);
+  if (!state.today || !state.today.items.some(it => todayKey(it.taskId, it.subId) === k)) return state;
+  return { ...state, today: { ...state.today, items: state.today.items.map(it =>
+    todayKey(it.taskId, it.subId) === k ? { taskId: toTaskId, subId: toSubId || null } : it) } };
+}
 function mapClearBig(state, taskId) { return mapTask(state, taskId, t => t); }
 
 function resolveProject(state, ref) {
@@ -708,10 +840,29 @@ function selSchedCompletedForWeek(state) {
                || (it.cadence === "monthly" && it.doneAt && it.doneAt >= start && it.doneAt < end))
     .map(it => ({ project: "Scheduled", accent: "oklch(0.640 0.100 75)", text: it.text }));
 }
+// The Today list, resolved to live rows. Anything that no longer exists is
+// skipped (rollToday prunes it from state on the next action).
+function selToday(state) {
+  const out = [];
+  ((state.today && state.today.items) || []).forEach(it => {
+    const r = resolveTodayItem(state, it);
+    if (!r) return;
+    out.push({
+      key: todayKey(it.taskId, it.subId), taskId: it.taskId, subId: it.subId || null,
+      task: r.task, sub: r.sub, project: r.project,
+      text: r.sub ? r.sub.text : r.task.text,
+      done: todayItemDone(r.task, r.sub, todayISO()),
+    });
+  });
+  return out;
+}
+function selTodayKeys(state) {
+  return new Set(((state.today && state.today.items) || []).map(it => todayKey(it.taskId, it.subId)));
+}
 function selProgress(state) {
   let done = 0, total = 0;
   state.projects.forEach(p => p.tasks.filter(t => t.lane === "active").forEach(t => { total++; if (t.status === "done") done++; }));
   return { done, total };
 }
 
-Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS });
+Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selTodayKeys, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS });

@@ -125,7 +125,9 @@ function App({ session }) {
           <window.NorthStar />
         </div>
 
-        <window.Composer />
+        {/* The "Tell me what to add" composer is hidden for now (composer.jsx
+            still loads — CloseWeek reuses focusAI). Today takes its slot. */}
+        <window.Today />
 
         <window.Scheduled />
 

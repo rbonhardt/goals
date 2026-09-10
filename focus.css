@@ -569,3 +569,53 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .sec-caret { border: none; background: none; cursor: pointer; color: var(--ink-3); font-size: 12px; line-height: 1; padding: 0 2px; align-self: center; transition: transform .15s, color .15s; }
 .sec-caret.open { transform: rotate(90deg); }
 .sec-caret:hover { color: var(--ink); }
+
+/* ---------------- Today (today.jsx) ---------------- */
+.today { margin: 20px 0 8px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 22px 28px 18px; box-shadow: 0 1px 2px oklch(0.5 0.02 60 / .04); transition: background .15s, outline-color .15s; outline: 1px dashed transparent; }
+.today-over { background: oklch(0.93 0.03 70 / .6); outline-color: var(--line-2); }
+.today-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 4px; }
+.today-title { font-family: var(--serif); font-size: 25px; font-weight: 500; margin: 0; letter-spacing: -.01em; line-height: 1.1; }
+.today-sub { display: block; font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--ink-3); margin-top: 2px; }
+.today-count { padding-top: 6px; white-space: nowrap; }
+.today-list { margin-top: 10px; display: flex; flex-direction: column; }
+.today-row { display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 0; border-top: 1px solid var(--line); position: relative; border-radius: 8px; }
+.today-row:first-child { border-top: none; }
+.today-row[draggable] { cursor: grab; }
+.today-row.dragging { opacity: .4; }
+.today-row.drop-before::before, .today-empty.drop-before::before {
+  content: ""; position: absolute; top: -2px; left: 4px; right: 8px; height: 3px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.today-row.drop-after::after {
+  content: ""; position: absolute; bottom: -2px; left: 4px; right: 8px; height: 3px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.today-grip { color: var(--line-2); font-size: 12px; letter-spacing: -2px; opacity: 0; transition: opacity .15s; user-select: none; flex: none; width: 10px; }
+.today-row:hover .today-grip { opacity: 1; }
+.today-num { font-family: var(--serif); font-size: 30px; font-style: italic; font-weight: 300; width: 28px; flex: none; text-align: center; line-height: 1; }
+.today-num-rest { color: var(--line-2); font-size: 22px; }
+.today-row.is-done .today-num { color: var(--ink-3) !important; }
+.today-box { width: 18px; height: 18px; border-radius: 5px; }
+.today-box.on::after { font-size: 11px; }
+.today-textwrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.today-text { font-family: var(--serif); font-size: 18px; line-height: 1.28; text-wrap: pretty; display: block; }
+.today-row:not(.today-top) .today-text { font-size: 16px; }
+.today-proj { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); min-width: 0; }
+.today-proj-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+.today-parent { text-transform: none; letter-spacing: 0; font-family: var(--serif); font-style: italic; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.today-remove { margin-left: auto; background: none; border: none; color: var(--line-2); font-size: 20px; cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; line-height: 1; padding: 4px; flex: none; }
+.today-row:hover .today-remove { opacity: 1; }
+.today-remove:hover { color: var(--clay); }
+.today-empty { position: relative; font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-3); padding: 14px 8px 10px; text-align: center; }
+.today-sun { color: var(--amber); font-style: normal; }
+
+/* ☀ pick-for-today toggles on task rows and step rows */
+.ttool-sun.on { color: oklch(0.66 0.13 72); }
+.ttool-sun.on:hover { color: var(--ink-2); }
+.sub-sun { margin-left: auto; font-size: 12px; padding: 1px 4px; opacity: 0; transition: opacity .15s; }
+.sub:hover .sub-sun, .sub-sun.on { opacity: 1; }
+@media (max-width: 560px) {
+  .today { padding: 18px 16px 14px; }
+  .today-text { font-size: 16px; }
+  .today-row:not(.today-top) .today-text { font-size: 14.5px; }
+}

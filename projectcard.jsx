@@ -105,7 +105,8 @@ function HabitDays({ task, accent }) {
 // siblings or dragged into any other task's step list — see Lane for the
 // case where the destination task has no open list to aim at.
 function SubList({ task }) {
-  const { dispatch } = window.useFocusStore();
+  const { state, dispatch } = window.useFocusStore();
+  const todayKeys = window.selTodayKeys(state);
   // drop : null | insertion index (where the dragged step would land)
   const [drop, setDrop] = React.useState(null);
   const ref = React.useRef(null);
@@ -117,6 +118,7 @@ function SubList({ task }) {
     // only one kind of drag is ever live.
     window.DRAG = { taskId: null };
     window.DRAGCARD = null;
+    window.TODAYDRAG = null;
     window.SUBDRAG = { taskId: task.id, subId };
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", subId); } catch (x) {}
@@ -173,6 +175,11 @@ function SubList({ task }) {
           <button className={"sub-box" + (s.done ? " on" : "")} onClick={() => dispatch({ type: "TOGGLE_SUB", taskId: task.id, subId: s.id })} />
           <window.InlineText value={s.text} onCommit={(t) => { if (t) dispatch({ type: "EDIT_SUB", taskId: task.id, subId: s.id, text: t }); else dispatch({ type: "DEL_SUB", taskId: task.id, subId: s.id }); }}
             className={"sub-text" + (s.done ? " done" : "")} />
+          {(() => { const on = todayKeys.has(window.todayKey(task.id, s.id)); return (
+            <button className={"ttool ttool-sun sub-sun" + (on ? " on" : " ttool-faint")}
+              title={on ? "On today's list — click to remove" : "Add this step to Today"}
+              onClick={(e) => { e.stopPropagation(); dispatch({ type: "TODAY_TOGGLE", taskId: task.id, subId: s.id }); }}>☀</button>
+          ); })()}
         </div>
       ))}
       <window.AddRow className="sub-add" placeholder="Add a step…" chainOnEnter
@@ -200,7 +207,8 @@ function DueChip({ task, onEdit, chipRef }) {
 }
 
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
-  const { dispatch } = window.useFocusStore();
+  const { state, dispatch } = window.useFocusStore();
+  const onToday = window.selTodayKeys(state).has(window.todayKey(task.id, null));
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(false);
   const [showDue, setShowDue] = React.useState(false);
@@ -238,6 +246,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
   function startDrag(e) {
     window.SUBDRAG = null; // never let a stale step drag ride along
     window.DRAGCARD = null;
+    window.TODAYDRAG = null;
     window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", task.id); } catch (x) {}
@@ -301,6 +310,9 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
         </div>
 
         <div className="task-tools">
+          <button className={"ttool ttool-sun" + (onToday ? " on" : " ttool-faint")}
+            title={onToday ? "On today's list — click to remove" : "Add to Today"}
+            onClick={() => dispatch({ type: "TODAY_TOGGLE", taskId: task.id, subId: null })}>☀</button>
           {/* starring a queued task promotes it out of the queue and into this week */}
           {task.big
             ? <button className="ttool" title="Pinned to Big Three" onClick={() => dispatch({ type: "CLEAR_BIG", taskId: task.id })} style={{ color: project.accent }}>★</button>
@@ -462,8 +474,8 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       const target = tasks.find(t => t.id === current.taskId);
       if (dragged && target && target.type !== "habit"
           && !(Array.isArray(dragged.subtasks) && dragged.subtasks.length > 0)) {
-        dispatch({ type: "ADD_SUB", taskId: current.taskId, text: dragged.text });
-        dispatch({ type: "DELETE_TASK", taskId: d.taskId });
+        // one action, so a Today entry for the task follows it into the step
+        dispatch({ type: "NEST_TASK", taskId: d.taskId, intoTaskId: current.taskId });
       }
     } else if (current.type === "between") {
       dispatch({ type: "MOVE_TASK", taskId: d.taskId, toProject: project.id, toLane: lane, toIndex: current.index });
@@ -549,7 +561,7 @@ function ProjectCard({ project }) {
 
   function startCardDrag(e) {
     if (e.target.closest(".task") || e.target.closest("input") || e.target.closest("textarea")) return;
-    window.SUBDRAG = null; window.DRAG = { taskId: null };
+    window.SUBDRAG = null; window.DRAG = { taskId: null }; window.TODAYDRAG = null;
     window.DRAGCARD = project.id; e.dataTransfer.effectAllowed = "move";
   }
 
