@@ -514,6 +514,38 @@ function ProjectCard({ project }) {
   // its note field; the TaskRow clears it back to null when it consumes it.
   const [openNoteForId, setOpenNoteForId] = React.useState(null);
   const doneCount = active.filter(t => t.status === "done").length;
+  // True while a task or step is being dragged over the queue header. The
+  // header is a drop target of its own so a closed queue can still receive
+  // a task — otherwise there is no lane to drop into until it is opened.
+  const [queueHeadOver, setQueueHeadOver] = React.useState(false);
+
+  function queueHeadDragOver(e) {
+    const d = window.DRAG;
+    if (!window.SUBDRAG && !(d && d.taskId)) return;
+    e.preventDefault();
+    setQueueHeadOver(true);
+  }
+
+  function queueHeadDrop(e) {
+    setQueueHeadOver(false);
+    // only a task or a step lands here — a project-card drag must fall
+    // through to the card's own reorder handler
+    if (!window.SUBDRAG && !(window.DRAG && window.DRAG.taskId)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sub = window.SUBDRAG;
+    if (sub) {
+      window.SUBDRAG = null;
+      dispatch({ type: "PROMOTE_SUB_TO_TASK", fromTaskId: sub.taskId, subId: sub.subId, toProject: project.id, toLane: "queue", toIndex: null });
+    } else {
+      const d = window.DRAG;
+      if (!d || !d.taskId) return;
+      window.DRAG = { taskId: null };
+      dispatch({ type: "MOVE_TASK", taskId: d.taskId, toProject: project.id, toLane: "queue", toIndex: null });
+    }
+    // Reveal where it landed.
+    if (!project.queueOpen) dispatch({ type: "TOGGLE_QUEUE", projectId: project.id });
+  }
 
   function startCardDrag(e) {
     if (e.target.closest(".task") || e.target.closest("input") || e.target.closest("textarea")) return;
@@ -583,7 +615,11 @@ function ProjectCard({ project }) {
       </Lane>
 
       <div className="queue-section">
-        <button className="queue-head" onClick={() => dispatch({ type: "TOGGLE_QUEUE", projectId: project.id })}>
+        <button className={"queue-head" + (queueHeadOver ? " drop-over" : "")}
+          onClick={() => dispatch({ type: "TOGGLE_QUEUE", projectId: project.id })}
+          onDragOver={queueHeadDragOver}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setQueueHeadOver(false); }}
+          onDrop={queueHeadDrop}>
           <span className={"queue-chev" + (project.queueOpen ? " open" : "")}>⌄</span>
           <span className="queue-label">Queue</span>
           <span className="queue-count">{queue.length}</span>

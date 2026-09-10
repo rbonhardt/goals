@@ -312,6 +312,7 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .queue-section { margin-top: 6px; border-top: 1px dashed var(--line); padding: 4px 6px; }
 .queue-head { width: 100%; display: flex; align-items: center; gap: 9px; background: none; border: none; cursor: pointer; padding: 9px 8px; border-radius: 8px; color: var(--ink-2); }
 .queue-head:hover { background: var(--paper-2); }
+.queue-head.drop-over { background: oklch(0.93 0.03 70 / .6); outline: 1px dashed var(--line-2); }
 .queue-chev { transition: transform .2s; font-size: 13px; color: var(--ink-3); transform: rotate(-90deg); }
 .queue-chev.open { transform: rotate(0); }
 .queue-label { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
