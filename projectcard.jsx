@@ -341,7 +341,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
   );
 }
 
-function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
+function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emptyText }) {
   const { state, dispatch } = window.useFocusStore();
   // drop : null | { type: "between", index } | { type: "into", taskId } | { type: "lane" }
   // - "between": insertion line between two rows; index = position to insert at
@@ -503,7 +503,7 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened }) {
       onDrop={onDrop}>
       {tasks.map((t, i) => <TaskRow key={t.id} task={t} project={project} lane={lane}
         openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} dropMode={dropForIndex(i)} />)}
-      {tasks.length === 0 && <div className="lane-empty" data-row>{lane === "queue" ? "Queue is empty" : "Drop a task here"}</div>}
+      {tasks.length === 0 && <div className="lane-empty" data-row>{emptyText || (lane === "queue" ? "Queue is empty" : "Drop a task here")}</div>}
       {children}
     </div>
   );
@@ -526,6 +526,14 @@ function ProjectCard({ project }) {
   // its note field; the TaskRow clears it back to null when it consumes it.
   const [openNoteForId, setOpenNoteForId] = React.useState(null);
   const doneCount = active.filter(t => t.status === "done").length;
+  // Finished to-dos leave the card so only open work is in view. The header
+  // link brings them back for a look; the choice is per card and forgotten
+  // on reload. Habits stay put — a met habit can still take more days.
+  const [showDone, setShowDone] = React.useState(false);
+  const hides = (t) => t.status === "done" && t.type !== "habit";
+  const hiddenCount = active.filter(hides).length + queue.filter(hides).length;
+  const shownActive = showDone ? active : active.filter(t => !hides(t));
+  const shownQueue = showDone ? queue : queue.filter(t => !hides(t));
   // True while a task or step is being dragged over the queue header. The
   // header is a drop target of its own so a closed queue can still receive
   // a task — otherwise there is no lane to drop into until it is opened.
@@ -601,6 +609,11 @@ function ProjectCard({ project }) {
       <div className="pcard-head" draggable onDragStart={startCardDrag} onDragEnd={() => window.DRAGCARD = null}>
         <span className="pcard-swatch" style={{ background: project.accent }} />
         <window.InlineText value={project.name} onCommit={(t) => dispatch({ type: "RENAME_PROJECT", projectId: project.id, name: t })} className="pcard-name" serif placeholder="Project" />
+        {hiddenCount > 0 && (
+          <button className="pcard-showdone" onClick={(e) => { e.stopPropagation(); setShowDone(v => !v); }}>
+            {showDone ? "Hide completed tasks" : "Show completed tasks"}
+          </button>
+        )}
         <span className="pcard-count">{doneCount}/{active.length}</span>
         <div className="ttool-menu" data-popmenu={menuOpen ? "" : null} ref={hoverMenu}>
           <button className="ttool ttool-faint" title="Project options" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => CAN_HOVER || !o); }}>⋯</button>
@@ -618,7 +631,8 @@ function ProjectCard({ project }) {
         </div>
       </div>
 
-      <Lane project={project} lane="active" tasks={active}
+      <Lane project={project} lane="active" tasks={shownActive}
+        emptyText={active.length > 0 && !showDone ? "All done — nice" : null}
         openNoteForId={openNoteForId}
         onNoteOpened={() => setOpenNoteForId(null)}>
         <window.AddRow className="task-add" placeholder="Add a to-do…"
@@ -634,10 +648,11 @@ function ProjectCard({ project }) {
           onDrop={queueHeadDrop}>
           <span className={"queue-chev" + (project.queueOpen ? " open" : "")}>⌄</span>
           <span className="queue-label">Queue</span>
-          <span className="queue-count">{queue.length}</span>
+          <span className="queue-count">{shownQueue.length}</span>
         </button>
         {project.queueOpen && (
-          <Lane project={project} lane="queue" tasks={queue}
+          <Lane project={project} lane="queue" tasks={shownQueue}
+            emptyText={queue.length > 0 && !showDone ? "Completed tasks are hidden" : null}
             openNoteForId={openNoteForId}
             onNoteOpened={() => setOpenNoteForId(null)}>
             <window.AddRow className="task-add" placeholder="Park something for later…"
