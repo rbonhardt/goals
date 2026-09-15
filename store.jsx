@@ -312,7 +312,8 @@ function tidyToday(state, roll) {
   if (items.length === 0 && cur.items.length === 0) return state;
   return { ...state, today: { date: newDay ? now : cur.date, items } };
 }
-const rollToday  = (state) => tidyToday(state, true);
+// A rolled day can flip a habit's done-ness, so the list re-settles after
+const rollToday  = (state) => sinkTodayDone(tidyToday(state, true));
 const pruneToday = (state) => tidyToday(state, false);
 
 // Applied after every action so the *stored* order always matches what's on
@@ -339,7 +340,35 @@ function sinkDone(state) {
     moved = true;
     return { ...p, tasks };
   });
-  return moved ? { ...state, projects } : state;
+  return sinkTodayDone(moved ? { ...state, projects } : state);
+}
+// Today rows: finished ones drop below the open ones, same as on the cards,
+// so the numbered top three are always live work. Sorts the *stored* list
+// (drag indexes are computed against what's rendered, so the two must agree).
+function cmpTodayRows(a, b) {
+  const da = a.sortDone ? 1 : 0, db = b.sortDone ? 1 : 0;
+  if (da !== db) return da - db;
+  if (!da) return 0;
+  // a habit's completedAt marks its weekly target, not today's check — it
+  // carries no stamp here and keeps the order it sank in
+  const at = (r) => r.sub ? r.sub.completedAt : r.task.type === "habit" ? 0 : r.task.completedAt;
+  return (at(a) || 0) - (at(b) || 0);                            // done pile: oldest → newest
+}
+// Done-ness is judged against the list's own date, not the clock: after
+// midnight a habit checked yesterday reads as open again, and re-sorting on
+// the hourly timer would push a stale idle tab (see tidyToday). The next
+// real action rolls the day first, then this settles the new order.
+function sinkTodayDone(state) {
+  const cur = state.today;
+  if (!cur || !Array.isArray(cur.items) || cur.items.length < 2) return state;
+  const rows = cur.items.map(it => {
+    const r = resolveTodayItem(state, it);
+    // pruneToday already ran, so every item resolves; guard anyway
+    return { it, task: r && r.task, sub: r && r.sub, sortDone: r ? todayItemDone(r.task, r.sub, cur.date) : false };
+  });
+  const sorted = stableSort(rows, cmpTodayRows);
+  if (sorted === rows) return state;
+  return { ...state, today: { ...cur, items: sorted.map(r => r.it) } };
 }
 
 // ============================================================
@@ -479,7 +508,10 @@ function applyAction(state, action) {
       const want = A.toIndex == null ? items.length : A.toIndex > from ? A.toIndex - 1 : A.toIndex;
       const idx = Math.max(0, Math.min(want, items.length));
       items.splice(idx, 0, moved);
-      return { ...state, today: { ...state.today, items } };
+      // a done row dragged above open ones sinks straight back — hand back
+      // the same state then, so a no-op drop doesn't trigger a sync push
+      const out = sinkTodayDone({ ...state, today: { ...state.today, items } });
+      return out.today.items.every((it, i) => it === state.today.items[i]) ? state : out;
     }
 
     case "ADD_TASK": {
@@ -852,9 +884,14 @@ function selToday(state) {
       task: r.task, sub: r.sub, project: r.project,
       text: r.sub ? r.sub.text : r.task.text,
       done: todayItemDone(r.task, r.sub, todayISO()),
+      // sort key — same date as the stored sort, so rendered and stored order
+      // agree (drag indexes are read against the rendered list)
+      sortDone: todayItemDone(r.task, r.sub, state.today.date),
     });
   });
-  return out;
+  // sinkTodayDone already settles the stored order; this keeps the rendered
+  // list independent of that (one definition, two call sites)
+  return stableSort(out, cmpTodayRows);
 }
 function selTodayKeys(state) {
   return new Set(((state.today && state.today.items) || []).map(it => todayKey(it.taskId, it.subId)));
