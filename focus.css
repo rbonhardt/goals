@@ -597,7 +597,7 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .today-num { font-family: var(--serif); font-size: 30px; font-style: italic; font-weight: 300; width: 28px; flex: none; text-align: center; line-height: 1; }
 .today-num-rest { color: var(--line-2); font-size: 22px; }
 .today-row.is-done .today-num { color: var(--ink-3) !important; }
-.today-box { width: 18px; height: 18px; border-radius: 5px; }
+.today-box { width: 18px; height: 18px; border-radius: 5px; margin: 0 1px; } /* 18px box in the 20px toggle slot, so text lines up */
 .today-box.on::after { font-size: 11px; }
 .today-textwrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .today-text { font-family: var(--serif); font-size: 18px; line-height: 1.28; text-wrap: pretty; display: block; }
@@ -611,7 +611,9 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .today-empty { position: relative; font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-3); padding: 14px 8px 10px; text-align: center; }
 .today-sun { color: var(--amber); font-style: normal; }
 /* a step right under its own task: indented, no label, lighter rule */
-.today-row.is-nested { padding-left: 30px; border-top-style: dashed; }
+.today-row.is-nested { border-top-style: dashed; }
+/* only the box + text step in (to the parent's text line); grip and number stay in their columns */
+.today-row.is-nested .today-box { margin-left: 33px; }
 /* card dropdown: plain label + caret with an invisible <select> on top */
 .today-card { position: relative; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; border-radius: 3px; }
 .today-card:hover { color: var(--ink); }
@@ -621,10 +623,9 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 /* type-to-add line (sits under the open rows, above the finished ones) */
 .today-add { display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 0; border-top: 1px solid var(--line); border-radius: 8px; }
 .today-add:first-child, .today-empty + .today-add { border-top: none; }
-.today-add.is-step { padding-left: 30px; }
 .today-add-box { width: 20px; height: 20px; flex: none; display: grid; place-items: center; padding: 0; background: none; border: 1.5px dashed var(--line-2); border-radius: 50%; color: var(--ink-3); font-size: 13px; line-height: 1; cursor: pointer; }
 .today-add-box:disabled { cursor: default; }
-.today-add-box.is-step { width: 18px; height: 18px; border-radius: 5px; }
+.today-add-box.is-step { width: 18px; height: 18px; border-radius: 5px; margin: 0 1px 0 33px; }
 .today-add.is-focused .today-add-box { border-color: var(--clay); color: var(--clay); }
 .today-add-input { width: 100%; min-width: 0; border: none; background: none; padding: 2px 0; font-family: var(--serif); font-size: 16px; line-height: 1.28; color: var(--ink); outline: none; }
 .today-add-input::placeholder { color: var(--ink-3); font-style: italic; }
