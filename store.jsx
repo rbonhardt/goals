@@ -264,6 +264,8 @@ function promoteDue(state) {
 // Items are *references*: the row on screen is always the live task or step,
 // so a check-off or an edit in either place shows in both. Array order is the
 // day's order; the first three rows are numbered 1-3 (the day's big three).
+// Something typed into the list is a real task (or step) on a card first,
+// then a reference here — see TODAY_NEW.
 const todayKey = (taskId, subId) => taskId + ":" + (subId || "");
 // Monday-first weekday index (matches habit.days) for a YYYY-MM-DD date.
 function weekdayIdx(iso) { return (new Date(iso + "T00:00:00").getDay() + 6) % 7; }
@@ -497,6 +499,25 @@ function applyAction(state, action) {
       const k = todayKey(A.taskId, A.subId);
       const on = state.today.items.some(it => todayKey(it.taskId, it.subId) === k);
       return applyAction(state, { ...A, type: on ? "TODAY_REMOVE" : "TODAY_ADD" });
+    }
+    case "TODAY_NEW": {
+      // typed straight into the Today list: a fresh to-do on card
+      // A.projectId's This week lane (never the queue), or — with
+      // A.parentTaskId — a new step on that task. It joins the list in the
+      // same action, so the list and the card change in one render/push.
+      const text = String(A.text || "").trim();
+      if (!text) return state;
+      if (A.parentTaskId) {
+        const { task } = findTask(state, A.parentTaskId);
+        if (!task || task.type === "habit") return state;
+        const subId = A.id || uid();
+        const s = mapTask(state, task.id, (t) => ({ ...t, subtasks: [...t.subtasks, { id: subId, text, done: false }] }));
+        return applyAction(s, { type: "TODAY_ADD", taskId: task.id, subId });
+      }
+      if (!state.projects.some(p => p.id === A.projectId)) return state;
+      const id = A.id || uid();
+      const s = applyAction(state, { type: "ADD_TASK", id, projectId: A.projectId, text, lane: "active" });
+      return applyAction(s, { type: "TODAY_ADD", taskId: id, subId: null });
     }
     case "TODAY_MOVE": {
       // reorder within the list: A.key moves to A.toIndex (read against the

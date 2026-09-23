@@ -610,6 +610,27 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .today-remove:hover { color: var(--clay); }
 .today-empty { position: relative; font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-3); padding: 14px 8px 10px; text-align: center; }
 .today-sun { color: var(--amber); font-style: normal; }
+/* a step right under its own task: indented, no label, lighter rule */
+.today-row.is-nested { padding-left: 30px; border-top-style: dashed; }
+/* card dropdown: plain label + caret with an invisible <select> on top */
+.today-card { position: relative; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; border-radius: 3px; }
+.today-card:hover { color: var(--ink); }
+.today-card:focus-within { outline: 1.5px solid var(--clay); outline-offset: 2px; }
+.today-card-caret { font-size: 9px; opacity: .6; }
+.today-card select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: none; font-size: 16px; /* 16px: iOS won't zoom */ }
+/* type-to-add line (sits under the open rows, above the finished ones) */
+.today-add { display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 0; border-top: 1px solid var(--line); border-radius: 8px; }
+.today-add:first-child, .today-empty + .today-add { border-top: none; }
+.today-add.is-step { padding-left: 30px; }
+.today-add-box { width: 20px; height: 20px; flex: none; display: grid; place-items: center; padding: 0; background: none; border: 1.5px dashed var(--line-2); border-radius: 50%; color: var(--ink-3); font-size: 13px; line-height: 1; cursor: pointer; }
+.today-add-box:disabled { cursor: default; }
+.today-add-box.is-step { width: 18px; height: 18px; border-radius: 5px; }
+.today-add.is-focused .today-add-box { border-color: var(--clay); color: var(--clay); }
+.today-add-input { width: 100%; min-width: 0; border: none; background: none; padding: 2px 0; font-family: var(--serif); font-size: 16px; line-height: 1.28; color: var(--ink); outline: none; }
+.today-add-input::placeholder { color: var(--ink-3); font-style: italic; }
+.today-add .today-proj { flex-wrap: wrap; row-gap: 2px; }
+.today-add-hints { text-transform: none; letter-spacing: 0; margin-left: 6px; opacity: .8; }
+@media (pointer: coarse) { .today-add-hints { display: none; } } /* no Tab key on a phone */
 
 /* ☀ pick-for-today toggles on task rows and step rows */
 .ttool-sun.on { color: oklch(0.66 0.13 72); }
