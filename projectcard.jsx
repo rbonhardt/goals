@@ -206,14 +206,81 @@ function DueChip({ task, onEdit, chipRef }) {
   );
 }
 
+// Sun pill on a task row for the day it is planned for — a weekday inside
+// the coming week, a date past that. On that day the task joins Today and
+// the pill goes away (see planToday in store.jsx). Click to change.
+function PlanChip({ task, onEdit, chipRef }) {
+  const d = window.daysUntil(task.plan);
+  const date = new Date(task.plan + "T00:00:00");
+  const label = d <= 0 ? "today" : d < 7
+    ? date.toLocaleDateString("en-US", { weekday: "short" })
+    : date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const full = date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  return (
+    <button className="plan-chip" ref={chipRef}
+      title={`Planned for ${full} — it joins Today that morning. Click to change`}
+      onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+      ☀ {label}
+    </button>
+  );
+}
+
+// Day picker: the next seven days as pills, then any later date. Today
+// itself is the ☀ button's job, so the earliest pick is tomorrow.
+function PlanEdit({ task, onClose }) {
+  const { dispatch } = window.useFocusStore();
+  const today = window.todayISO();
+  const days = [1, 2, 3, 4, 5, 6, 7].map(n => window.addDaysISO(today, n));
+  const set = (plan) => dispatch({ type: "SET_PLAN", taskId: task.id, plan });
+  const onKeyDown = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(true); } };
+  const later = task.plan && !days.includes(task.plan) ? task.plan : "";
+  return (
+    // Blur sits on the wrapper, as with the due-date editor: focus leaving it
+    // closes the picker. The pills and clear eat mousedown so a click never
+    // steals focus from inside (Safari buttons don't take focus on click).
+    <div className="plan-edit" onClick={(e) => e.stopPropagation()} onKeyDown={onKeyDown}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) onClose(false); }}>
+      <span className="plan-edit-label">Work on it</span>
+      <div className="plan-days">
+        {days.map((iso, i) => {
+          const d = new Date(iso + "T00:00:00");
+          const on = task.plan === iso;
+          return (
+            <button key={iso} className={"plan-day" + (on ? " on" : "")} autoFocus={on || (!task.plan && i === 0)}
+              title={d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { set(on ? null : iso); onClose(true); }}>
+              {d.toLocaleDateString("en-US", { weekday: "short" })} <b>{d.getDate()}</b>
+            </button>
+          );
+        })}
+      </div>
+      {/* only a day after today counts — a half-typed year (0002-…) must not
+          read as a past day and drop the task on Today mid-keystroke */}
+      <input type="date" className="due-input plan-input" min={days[0]} value={later} aria-label="Later day" autoFocus={!!later}
+        onChange={(e) => { const v = e.target.value; if (v && v > today) set(v); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onClose(true); } }} />
+      {task.plan && <button className="plan-clear" onMouseDown={(e) => e.preventDefault()}
+        onClick={() => { set(null); onClose(false); }}>clear</button>}
+    </div>
+  );
+}
+
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { state, dispatch } = window.useFocusStore();
   const onToday = window.selTodayKeys(state).has(window.todayKey(task.id, null));
   const [showNote, setShowNote] = React.useState(!!task.note);
   const [showSubs, setShowSubs] = React.useState(false);
   const [showDue, setShowDue] = React.useState(false);
+  const [showPlan, setShowPlan] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const chipRef = React.useRef(null);
+  const planRef = React.useRef(null);
+  // refocus=true hands focus back to the pill, when there still is one
+  const closePlan = (refocus) => {
+    setShowPlan(false);
+    if (refocus) setTimeout(() => { if (planRef.current) planRef.current.focus(); }, 0);
+  };
   // refocus=true hands keyboard focus back to the chip (Enter/Escape close);
   // the timeout lets the chip re-mount first
   const closeDueEditor = (refocus) => {
@@ -270,8 +337,11 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
             {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
               className={"task-text st-text-" + task.status} placeholder="Task…" />
+            {!isHabit && task.plan && task.status !== "done" && !showPlan && <PlanChip task={task} chipRef={planRef} onEdit={() => setShowPlan(true)} />}
             {!isHabit && task.due && !showDue && <DueChip task={task} chipRef={chipRef} onEdit={() => setShowDue(true)} />}
           </div>
+
+          {showPlan && !isHabit && <PlanEdit task={task} onClose={closePlan} />}
 
           {showDue && (
             <div className="due-edit" onClick={(e) => e.stopPropagation()}
@@ -327,6 +397,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
                 <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
                 <button onClick={() => { dispatch({ type: "TOGGLE_RECURRING", taskId: task.id }); closeMenu(); }}>{task.recurring ? "Don’t repeat weekly" : "Repeat weekly"}</button>
                 {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); closeMenu(); }}>Add steps</button>}
+                {!isHabit && task.status !== "done" && <button onClick={() => { setShowPlan(true); closeMenu(); }}>{task.plan ? "Change plan day" : "Plan for a day"}</button>}
                 {!isHabit && <button onClick={() => { setShowDue(true); closeMenu(); }}>{task.due ? "Change due date" : "Set due date"}</button>}
                 <button onClick={() => { dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }); closeMenu(); }}>
                   {lane === "active" ? "Send to queue" : "Move to active"}

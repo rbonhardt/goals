@@ -29,16 +29,17 @@ function fmtRange(startISO) {
 }
 function addDaysISO(iso, n) {
   const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return localISO(d);
+}
+// Local calendar date of a Date (toISOString would read it in UTC, a day off
+// for anyone east of Greenwich, or after 7-8pm ET for "now").
+function localISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // ---- due-date helpers ----
-// Local calendar date (toISOString would jump to tomorrow after 7-8pm ET).
 const DUE_LEAD_DAYS = 10;
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+function todayISO() { return localISO(new Date()); }
 function daysUntil(dueISO, fromISO = todayISO()) {
   const a = new Date(fromISO + "T00:00:00"), b = new Date(dueISO + "T00:00:00");
   return Math.round((b - a) / 86400000);
@@ -79,6 +80,35 @@ function quarterIsDue(state, now = new Date()) {
   return today >= end;
 }
 
+// ---- goals (the quarter's and the month's) ----
+// state.quarter.goals and state.month.goals share one shape:
+// [{ id, text, done, subs: [{ id, text, done }] }] — one level of sub-goals.
+// Quarter goals were plain strings before the Goals tile; normGoal lifts them.
+// A tab still running the old code crashes on the first pull of goal objects
+// — on purpose: a crashed tab saves nothing, while one kept alive on a string
+// copy could close the quarter with that copy and wipe the real list.
+function normGoal(g) {
+  if (typeof g === "string") return { id: uid(), text: g, done: false, subs: [] };
+  const o = g && typeof g === "object" ? g : {};
+  return { id: o.id || uid(), text: String(o.text || ""), done: !!o.done,
+    subs: (Array.isArray(o.subs) ? o.subs : []).map(s => ({ id: (s && s.id) || uid(), text: String((s && s.text) || ""), done: !!(s && s.done) })) };
+}
+// "YYYY-MM" for the local calendar month
+function monthKey(iso = todayISO()) { return iso.slice(0, 7); }
+// The month list belongs to one calendar month. On the 1st the old list is
+// filed in monthHistory ({ key, goals, closedAt }, like quarterHistory) and a
+// fresh, empty one starts. Runs with the day roll (load, pull, and before
+// every action — never on the hourly timer). A list dated after the device's
+// own month (a clock running behind) is left alone.
+function rollMonth(state) {
+  const now = monthKey(), m = state.month;
+  if (!m || m.key >= now) return state;
+  const hist = state.monthHistory || [];
+  return { ...state,
+    month: { key: now, goals: [] },
+    monthHistory: m.goals.length ? [{ key: m.key, goals: m.goals, closedAt: Date.now() }, ...hist] : hist };
+}
+
 // ---- default scheduled commitments (used by seed + first migration) ----
 function defaultScheduled() {
   return [
@@ -94,7 +124,7 @@ function seed() {
   return {
     version: 1,
     week: { n: 22, startISO },
-    quarterCollapsed: false,
+    // not shown since the Goals tile replaced North Star — kept so it can return
     affirmations: [
       "I own a 20-unit agritourism micro-hotel and wedding venue that promotes regenerative agriculture.",
       "I am in the best shape of my life — mentally, physically, emotionally — because I stick to my habits and AM/PM routines and put the important first.",
@@ -104,8 +134,10 @@ function seed() {
       "Airbnb $10k+ / mo",
       "Motion 5%+ MoM growth",
       "$200K capital + land/farm identified",
-    ]},
+    ].map(normGoal) },
     quarterHistory: [],
+    month: { key: monthKey(), goals: [] },
+    monthHistory: [],
     projects: [
       { id: "airbnb", name: "Airbnb", accent: "oklch(0.605 0.108 42)", queueOpen: false, tasks: [
         mk("List on VRBO, Booking.com & direct site", { big: 1 }),
@@ -151,6 +183,13 @@ function migrate(s) {
   if (!Array.isArray(s.scheduled)) s.scheduled = defaultScheduled();
   // Today list added later: an empty list dated today
   if (!s.today || !Array.isArray(s.today.items)) s.today = { date: todayISO(), items: [] };
+  // Goals tile added later: quarter goals were plain strings (see normGoal);
+  // the month list is new
+  if (!s.quarter) s.quarter = { label: "Q?", range: "", goals: [] };
+  s.quarter.goals = (Array.isArray(s.quarter.goals) ? s.quarter.goals : []).map(normGoal).filter(g => g.text.trim());
+  if (!s.month || !Array.isArray(s.month.goals)) s.month = { key: monthKey(), goals: [] };
+  s.month.goals = s.month.goals.map(normGoal);
+  if (!Array.isArray(s.monthHistory)) s.monthHistory = [];
   s.scheduled.forEach(it => {
     if (!it.cadence) it.cadence = "weekly";
     if (it.day == null) it.day = 6;
@@ -166,9 +205,10 @@ function migrate(s) {
     if (t.recurring === undefined) t.recurring = t.type === "habit";
     t.due = cleanDue(t.due);
     if (t.duePromoted === undefined) t.duePromoted = false;
+    t.plan = t.type === "habit" ? null : cleanDue(t.plan);
   }));
   // load and every server pull come through here: roll the day over on fresh data
-  return rollToday(sinkDone(s));
+  return rollDay(sinkDone(s));
 }
 
 // ============================================================
@@ -314,8 +354,38 @@ function tidyToday(state, roll) {
   if (items.length === 0 && cur.items.length === 0) return state;
   return { ...state, today: { date: newDay ? now : cur.date, items } };
 }
-// A rolled day can flip a habit's done-ness, so the list re-settles after
-const rollToday  = (state) => sinkTodayDone(tidyToday(state, true));
+// ---- plan days: a task picked ahead for a day joins Today that morning ----
+// task.plan = "YYYY-MM-DD" | null. Once its day comes (or has passed — the app
+// may not have been opened that day) the task goes on the end of the Today
+// list, moves to its card's This week lane (a Today task is this week's
+// work), and the plan is spent, so taking it back off Today sticks. A task
+// finished ahead of its day just drops the plan.
+function planToday(state) {
+  const now = todayISO();
+  let items = state.today.items, fired = false, laneMoved = false;
+  const projects = state.projects.map(p => {
+    const tasks = (p.tasks || []).map(t => {
+      if (!t.plan || t.plan > now) return t;
+      fired = true;
+      if (t.type === "habit" || t.status === "done") return { ...t, plan: null };
+      if (!items.some(it => it.taskId === t.id && !it.subId)) items = [...items, { taskId: t.id, subId: null }];
+      if (t.lane === "queue") laneMoved = true;
+      return { ...t, plan: null, lane: t.lane === "queue" ? "active" : t.lane };
+    });
+    return tasks.some((t, i) => t !== p.tasks[i]) ? { ...p, tasks } : p;
+  });
+  if (!fired) return state;
+  // an empty list keeps a stale date (see tidyToday) — restart it now
+  const date = state.today.items.length === 0 && items.length > 0 ? now : state.today.date;
+  const out = { ...state, projects, today: { date, items } };
+  // a lane change must re-sort the cards so stored order matches the screen
+  return laneMoved ? sinkDone(out) : out;
+}
+
+// The day roll: file last month's goals, carry Today's unfinished rows over
+// (dropping the finished ones), then add what was planned for today. A rolled
+// day can flip a habit's done-ness, so the list re-settles after.
+const rollDay    = (state) => sinkTodayDone(planToday(tidyToday(rollMonth(state), true)));
 const pruneToday = (state) => tidyToday(state, false);
 
 // Applied after every action so the *stored* order always matches what's on
@@ -333,6 +403,9 @@ function sinkDone(state) {
     const active = [], queue = [], other = [];
     orig.map(t => {
       t = stamp(t, t.status === "done");
+      // finishing a task spends its plan day — otherwise a weekly task done
+      // early would be reset by the week close and still land on that day
+      if (t.status === "done" && t.plan) t = { ...t, plan: null };
       if (!Array.isArray(t.subtasks) || !t.subtasks.length) return t;
       const subtasks = stableSort(t.subtasks.map(s => stamp(s, s.done)), cmpSubs);
       return subtasks.every((s, i) => s === t.subtasks[i]) ? t : { ...t, subtasks };
@@ -391,9 +464,9 @@ function findTask(state, taskId) {
 // never rolls (see tidyToday) — the next real action or tab refocus will.
 function reducer(state, action) {
   const timer = action.type === "DUE_TICK";
-  const base = action.type === "HYDRATE" || timer ? state : rollToday(state);
+  const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
   const next = sinkDone(applyAction(base, action));
-  return action.type === "HYDRATE" ? rollToday(next) : next;
+  return action.type === "HYDRATE" ? rollDay(next) : next;
 }
 
 function applyAction(state, action) {
@@ -402,16 +475,32 @@ function applyAction(state, action) {
     case "RESET_ALL": return seed();
     case "HYDRATE": return A.state;
 
-    case "TOGGLE_QUARTER":
-      return { ...state, quarterCollapsed: !state.quarterCollapsed };
-
-    case "EDIT_AFFIRMATION": {
-      const aff = state.affirmations.slice(); aff[A.i] = A.text;
-      return { ...state, affirmations: aff };
+    // ---- goals: A.scope is "quarter" or "month" (with A.key, the month the
+    // list on screen belongs to); A.id may name a sub-goal ----
+    case "GOAL_ADD": {
+      // a new goal at the end of the list, or — with A.parentId — a new
+      // sub-goal at the end of that goal's list
+      const at = goalTarget(state, A), text = String(A.text || "").trim();
+      if (!at || !text) return state;
+      const item = { id: A.id || uid(), text, done: false };
+      if (!A.parentId) return at.put([...at.list, { ...item, subs: [] }]);
+      if (!at.list.some(g => g.id === A.parentId)) return state;
+      return at.put(at.list.map(g => g.id === A.parentId ? { ...g, subs: [...g.subs, item] } : g));
     }
-    case "EDIT_QUARTER_GOAL": {
-      const g = state.quarter.goals.slice(); g[A.i] = A.text;
-      return { ...state, quarter: { ...state.quarter, goals: g } };
+    case "GOAL_TOGGLE": {
+      const at = goalTarget(state, A);
+      return at ? at.put(mapGoal(at.list, A.id, g => ({ ...g, done: !g.done }))) : state;
+    }
+    case "GOAL_EDIT": {
+      const at = goalTarget(state, A), text = String(A.text || "").trim();
+      return at && text ? at.put(mapGoal(at.list, A.id, g => ({ ...g, text }))) : state;
+    }
+    case "GOAL_DELETE": {
+      // deleting a goal takes its sub-goals with it
+      const at = goalTarget(state, A);
+      if (!at) return state;
+      return at.put(at.list.filter(g => g.id !== A.id)
+        .map(g => g.subs.some(x => x.id === A.id) ? { ...g, subs: g.subs.filter(x => x.id !== A.id) } : g));
     }
 
     // ---- tasks ----
@@ -437,9 +526,9 @@ function applyAction(state, action) {
         return { ...t, target, status };
       });
     case "SET_TASK_TYPE":
-      // habits have no due-date UI, so a leftover due must not linger invisibly
+      // habits have no due-date or plan-day UI, so leftovers must not linger invisibly
       return mapTask(state, A.taskId, (t) => A.kind === "habit"
-        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true, due: null, duePromoted: false }
+        ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true, due: null, duePromoted: false, plan: null }
         : { ...t, type: "todo", status: "todo" });
     case "TOGGLE_RECURRING":
       return mapTask(state, A.taskId, (t) => ({ ...t, recurring: !t.recurring }));
@@ -452,6 +541,13 @@ function applyAction(state, action) {
     case "SET_DUE":
       // a fresh date re-arms auto-promotion (duePromoted back to false)
       return mapTask(state, A.taskId, (t) => ({ ...t, due: cleanDue(A.due), duePromoted: false }));
+    case "SET_PLAN": {
+      // pick a day to work on a task (null clears it). A day that is already
+      // here puts the task on Today right away rather than at the next roll.
+      const { task } = findTask(state, A.taskId);
+      if (!task || task.type === "habit") return state;
+      return planToday(mapTask(state, A.taskId, (t) => ({ ...t, plan: cleanDue(A.plan) })));
+    }
 
     case "SET_BIG": {
       // assign this task to big slot A.n; clear any other task holding it
@@ -487,7 +583,7 @@ function applyAction(state, action) {
       const items = state.today.items.slice();
       const idx = A.toIndex == null ? items.length : Math.max(0, Math.min(A.toIndex, items.length));
       items.splice(idx, 0, { taskId: A.taskId, subId: A.subId || null });
-      // an empty list keeps a stale date (see rollToday) — restart it now
+      // an empty list keeps a stale date (see tidyToday) — restart it now
       return { ...state, today: { date: items.length === 1 ? todayISO() : state.today.date, items } };
     }
     case "TODAY_REMOVE": {
@@ -536,7 +632,7 @@ function applyAction(state, action) {
     }
 
     case "ADD_TASK": {
-      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: A.taskType === "habit", due: cleanDue(A.due), duePromoted: false };
+      const t = { id: A.id || uid(), text: A.text, status: "todo", note: A.note || "", big: null, lane: A.lane || "active", subtasks: A.subtasks || [], type: A.taskType || "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: A.taskType === "habit", due: cleanDue(A.due), duePromoted: false, plan: null };
       return { ...state, projects: state.projects.map(p =>
         p.id === A.projectId ? { ...p, tasks: A.toTop ? [t, ...p.tasks] : [...p.tasks, t] } : p) };
     }
@@ -641,7 +737,7 @@ function applyAction(state, action) {
       // bail before removal if there is nowhere to land — otherwise the step
       // would vanish
       if (!sub || !state.projects.some(p => p.id === A.toProject)) return state;
-      const t = { id: uid(), text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false };
+      const t = { id: uid(), text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false, plan: null };
       // a step on the Today list stays on it as the task it became
       const s = retargetToday(mapTask(state, A.fromTaskId, (x) => ({ ...x, subtasks: x.subtasks.filter(y => y.id !== A.subId) })), A.fromTaskId, A.subId, t.id, null);
       return { ...s, projects: s.projects.map(p => {
@@ -744,8 +840,7 @@ function applyAction(state, action) {
       return {
         ...state,
         quarterHistory: [A.archive, ...(state.quarterHistory || [])],
-        quarter: A.next,
-        quarterCollapsed: false,
+        quarter: { ...A.next, goals: (A.next.goals || []).map(normGoal) },
       };
 
     case "APPLY_AI": {
@@ -785,6 +880,25 @@ function retargetToday(state, taskId, subId, toTaskId, toSubId) {
     todayKey(it.taskId, it.subId) === k ? { taskId: toTaskId, subId: toSubId || null } : it) } };
 }
 function mapClearBig(state, taskId) { return mapTask(state, taskId, t => t); }
+// The goal list a GOAL_* action lands on: { list, put(newList) -> state },
+// or null for an unknown scope. A month action made on a list that has since
+// rolled over (a tab left open past the 1st, the roll running just before
+// the action) lands in that month's archive, so the click isn't lost. With
+// no archive (that month had no goals) it lands on the current month.
+function goalTarget(state, A) {
+  if (A.scope === "quarter")
+    return { list: state.quarter.goals, put: (goals) => ({ ...state, quarter: { ...state.quarter, goals } }) };
+  if (A.scope !== "month") return null;
+  const hist = state.monthHistory || [];
+  const i = A.key && A.key !== state.month.key ? hist.findIndex(h => h.key === A.key) : -1;
+  if (i < 0) return { list: state.month.goals, put: (goals) => ({ ...state, month: { ...state.month, goals } }) };
+  return { list: hist[i].goals, put: (goals) => ({ ...state, monthHistory: hist.map((h, j) => j === i ? { ...h, goals } : h) }) };
+}
+// transform the one goal or sub-goal with this id
+function mapGoal(goals, id, fn) {
+  return goals.map(g => g.id === id ? fn(g)
+    : g.subs.some(x => x.id === id) ? { ...g, subs: g.subs.map(x => x.id === id ? fn(x) : x) } : g);
+}
 
 function resolveProject(state, ref) {
   if (!ref) return state.projects[0];
@@ -894,7 +1008,7 @@ function selSchedCompletedForWeek(state) {
     .map(it => ({ project: "Scheduled", accent: "oklch(0.640 0.100 75)", text: it.text }));
 }
 // The Today list, resolved to live rows. Anything that no longer exists is
-// skipped (rollToday prunes it from state on the next action).
+// skipped (the day roll prunes it from state on the next action).
 function selToday(state) {
   const out = [];
   ((state.today && state.today.items) || []).forEach(it => {
@@ -923,4 +1037,4 @@ function selProgress(state) {
   return { done, total };
 }
 
-Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selTodayKeys, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS });
+Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selTodayKeys, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS, monthKey });

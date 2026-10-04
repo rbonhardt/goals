@@ -6,7 +6,11 @@ const Q_NEXT = { Q1: ["Q2", "Apr 1 – Jun 30"], Q2: ["Q3", "Jul 1 – Sep 30"],
 function QuarterReview({ onClose }) {
   const { state, dispatch } = window.useFocusStore();
   const q = state.quarter;
-  const [hits, setHits] = React.useState(q.goals.map(() => null)); // true=hit, false=missed, null=unset
+  // goal id -> true=hit | false=missed (unset otherwise). Keyed by id, not
+  // position, so a sync that changes the list mid-review can't shift marks
+  // onto the wrong goal. A goal checked off on the tile starts as a hit.
+  const [hits, setHits] = React.useState(() => Object.fromEntries(q.goals.filter((g) => g.done).map((g) => [g.id, true])));
+  const mark = (id, v) => setHits((h) => ({ ...h, [id]: v }));
   const suggest = Q_NEXT[q.label] || ["Next", ""];
   const [label, setLabel] = React.useState(suggest[0]);
   const [range, setRange] = React.useState(suggest[1]);
@@ -19,17 +23,17 @@ function QuarterReview({ onClose }) {
   function finish() {
     const archive = {
       label: q.label, range: q.range,
-      goals: q.goals.map((text, i) => ({ text, done: hits[i] === true })),
+      goals: q.goals.map((g) => ({ text: g.text, done: hits[g.id] === true, subs: g.subs.map((s) => ({ text: s.text, done: s.done })) })),
       journal: reflection.trim(),
       closedAt: Date.now()
     };
+    // more goals and sub-goals can be added on the tile afterwards
     const next = { label: label.trim() || "Next", range: range.trim(), goals: goals.map((g) => g.trim()).filter(Boolean) };
-    if (next.goals.length === 0) next.goals = ["", "", ""];
     dispatch({ type: "ROLL_QUARTER", archive, next });
     onClose();
   }
 
-  const hitCount = hits.filter((h) => h === true).length;
+  const hitCount = q.goals.filter((g) => hits[g.id] === true).length;
 
   return (
     <div className="overlay" onMouseDown={(e) => {if (e.target === e.currentTarget) onClose();}}>
@@ -46,12 +50,12 @@ function QuarterReview({ onClose }) {
           {/* recap */}
           <div className="cw-section-label"><span className="eyebrow">How did the {q.label} goals land?</span><span className="cw-tally">{hitCount}/{q.goals.length}</span></div>
           <div className="qr-recap">
-            {q.goals.map((g, i) =>
-            <div className={"qr-goal" + (hits[i] === true ? " hit" : hits[i] === false ? " miss" : "")} key={i}>
-                <span className="qr-goal-text">{g}</span>
+            {q.goals.map((g) =>
+            <div className={"qr-goal" + (hits[g.id] === true ? " hit" : hits[g.id] === false ? " miss" : "")} key={g.id}>
+                <span className="qr-goal-text">{g.text}</span>
                 <div className="qr-mark">
-                  <button className={"qr-btn hit" + (hits[i] === true ? " on" : "")} onClick={() => setHits((h) => {const n = h.slice();n[i] = true;return n;})}>Hit</button>
-                  <button className={"qr-btn miss" + (hits[i] === false ? " on" : "")} onClick={() => setHits((h) => {const n = h.slice();n[i] = false;return n;})}>Missed</button>
+                  <button className={"qr-btn hit" + (hits[g.id] === true ? " on" : "")} onClick={() => mark(g.id, true)}>Hit</button>
+                  <button className={"qr-btn miss" + (hits[g.id] === false ? " on" : "")} onClick={() => mark(g.id, false)}>Missed</button>
                 </div>
               </div>
             )}

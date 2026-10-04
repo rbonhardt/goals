@@ -120,14 +120,15 @@ function App({ session }) {
       </header>
 
       <main className="main">
+        {/* Goals runs down the right side, beside Big Three and Today, so a
+            long goal list never leaves a hole next to a short one. The "Tell
+            me what to add" composer is hidden for now (composer.jsx still
+            loads — CloseWeek reuses focusAI). Today takes its slot. */}
         <div className="top-row">
           <window.BigThree />
-          <window.NorthStar />
+          <window.Goals />
+          <window.Today />
         </div>
-
-        {/* The "Tell me what to add" composer is hidden for now (composer.jsx
-            still loads — CloseWeek reuses focusAI). Today takes its slot. */}
-        <window.Today />
 
         <window.Scheduled />
 

@@ -71,7 +71,12 @@ button { font-family: inherit; }
 
 /* ---------------- main layout ---------------- */
 .main { max-width: 1320px; margin: 0 auto; padding: clamp(18px, 3vw, 32px) clamp(18px, 4vw, 48px) 60px; }
-.top-row { display: grid; grid-template-columns: 1.45fr 1fr; gap: 20px; align-items: stretch; }
+/* Big Three over Today on the left, Goals down the right. Row 1 is Big Three's
+   own height; any extra height of the Goals column goes to row 2. */
+.top-row { display: grid; grid-template-columns: 1.45fr 1fr; grid-template-rows: auto 1fr; grid-template-areas: "b3 goals" "today goals"; gap: 20px; align-items: start; margin-bottom: 8px; }
+.top-row > .b3-tile { grid-area: b3; }
+.top-row > .goals-tile { grid-area: goals; }
+.top-row > .today { grid-area: today; margin: 0; }
 
 /* ---------------- Big Three tile ---------------- */
 .b3-tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 26px 28px; box-shadow: 0 1px 2px oklch(0.5 0.02 60 / .04); }
@@ -98,20 +103,8 @@ button { font-family: inherit; }
 .b3-row:hover .b3-unpin { opacity: 1; }
 .b3-unpin:hover { color: var(--clay); }
 
-/* ---------------- North Star tile ---------------- */
+/* ---------------- Goals tile (goals.jsx): quarter + month ---------------- */
 .ns-tile { background: var(--ink); color: var(--paper); border-radius: var(--r); padding: 24px 26px; display: flex; flex-direction: column; box-shadow: 0 1px 2px oklch(0.5 0.02 60 / .06); }
-.ns-head { display: flex; justify-content: space-between; align-items: baseline; }
-.ns-eyebrow { color: var(--gold); }
-.ns-sub { font-family: var(--serif); font-style: italic; font-size: 13px; color: oklch(0.72 0.01 80); }
-.ns-affs { margin: 16px 0 4px; display: flex; flex-direction: column; gap: 13px; flex: 1; }
-.ns-aff { display: flex; gap: 12px; }
-.ns-aff-mark { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--gold); flex: none; width: 22px; padding-top: 3px; }
-.ns-aff-text { font-family: var(--serif); font-size: 15.5px; line-height: 1.42; color: oklch(0.93 0.008 80); text-wrap: pretty; display: block; }
-.ns-affs .ns-aff:first-child .ns-aff-text { font-size: 19.5px; line-height: 1.34; color: oklch(0.97 0.008 80); }
-.ns-affs .ns-aff:first-child .ns-aff-mark { color: var(--gold); font-size: 15px; padding-top: 4px; }
-.ns-quarter { margin-top: 18px; border-top: 1px solid oklch(0.4 0.02 60); padding-top: 14px; }
-.ns-q-row { display: flex; align-items: center; gap: 8px; }
-.ns-q-head { flex: 1; display: flex; align-items: center; gap: 8px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; text-align: left; -webkit-appearance: none; appearance: none; }
 .ns-q-new { flex: none; width: 26px; height: 26px; border-radius: 8px; border: 1px solid oklch(0.42 0.02 60); background: none; color: oklch(0.78 0.01 80); font-size: 14px; cursor: pointer; line-height: 1; display: grid; place-items: center; transition: all .15s; }
 .ns-q-new:hover { background: oklch(0.4 0.02 60); color: var(--gold); border-color: var(--gold); }
 .ns-q-new.due { background: var(--gold); border-color: var(--gold); color: oklch(0.28 0.03 60); }
@@ -123,13 +116,37 @@ button { font-family: inherit; }
   0%, 100% { box-shadow: 0 0 0 0 oklch(0.74 0.094 78 / .55); }
   50% { box-shadow: 0 0 0 7px oklch(0.74 0.094 78 / 0); }
 }
-.ns-q-eyebrow { color: var(--gold); line-height: 1.4; }
-.ns-chev { color: oklch(0.7 0.01 80); transition: transform .2s; font-size: 14px; }
-.ns-chev.closed { transform: rotate(-90deg); }
-.ns-goals { margin-top: 12px; display: flex; flex-direction: column; gap: 9px; }
-.ns-goal { display: flex; align-items: baseline; gap: 10px; }
-.ns-goal-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); flex: none; position: relative; top: -3px; }
-.ns-goal-text { font-size: 13.5px; line-height: 1.4; color: oklch(0.85 0.008 80); }
+.goals-sec + .goals-sec { margin-top: 16px; border-top: 1px solid oklch(0.4 0.02 60); padding-top: 14px; }
+.goals-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.goals-eyebrow { flex: 1; color: var(--gold); line-height: 1.4; }
+.goals-left { font-family: var(--mono); font-size: 10.5px; color: oklch(0.72 0.01 80); white-space: nowrap; }
+.goals-list { margin-top: 8px; display: flex; flex-direction: column; }
+.goal { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
+.goal.is-sub { padding-left: 26px; }
+.goal-box { flex: none; position: relative; width: 16px; height: 16px; margin-top: 3px; padding: 0; border-radius: 50%; border: 1.5px solid oklch(0.6 0.02 70); background: none; cursor: pointer; transition: border-color .15s, background .15s; }
+.goal.is-sub .goal-box { width: 14px; height: 14px; margin-top: 2px; }
+.goal-box:hover { border-color: var(--gold); }
+.goal-box.on { background: var(--gold); border-color: var(--gold); }
+.goal-box.on::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; color: var(--ink); }
+.goal-text { flex: 1; min-width: 0; display: block; font-family: var(--serif); font-size: 15.5px; line-height: 1.35; color: oklch(0.93 0.008 80); text-wrap: pretty; }
+.goal.is-sub .goal-text { font-family: var(--sans); font-size: 13px; line-height: 1.4; color: oklch(0.82 0.008 80); }
+.goal.is-done .goal-text { text-decoration: line-through; text-decoration-color: oklch(0.55 0.01 80); color: oklch(0.62 0.01 80); }
+.goal .inl-ph { color: oklch(0.6 0.01 80); }
+.goal-x { flex: none; background: none; border: none; color: oklch(0.6 0.01 80); font-size: 16px; line-height: 1; padding: 1px 4px; cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; }
+.goal:hover .goal-x, .goal-x:focus-visible { opacity: 1; }
+.goal-x:hover { color: var(--gold); }
+@media (hover: none) { .goal-x { opacity: .55; } } /* no hover on a phone */
+/* type-to-add line */
+.goal-add { align-items: center; }
+.goal-add-box { display: grid; place-items: center; margin-top: 0; border-style: dashed; color: oklch(0.65 0.01 80); font-size: 11px; line-height: 1; }
+.goal-add-box:disabled { cursor: default; }
+.goal-add.is-focused .goal-add-box { border-color: var(--gold); color: var(--gold); }
+.goal.is-sub.goal-add .goal-add-box { margin-top: 0; }
+.goal-add-input { flex: 1; min-width: 0; border: none; background: none; outline: none; padding: 1px 0; font-family: var(--serif); font-size: 15px; color: oklch(0.93 0.008 80); }
+.goal.is-sub .goal-add-input { font-family: var(--sans); font-size: 13px; }
+.goal-add-input::placeholder { color: oklch(0.6 0.01 80); font-style: italic; }
+.goal-add-hints { flex: none; font-family: var(--mono); font-size: 10px; color: oklch(0.65 0.01 80); white-space: nowrap; }
+@media (pointer: coarse) { .goal-add-hints { display: none; } } /* no Tab key on a phone */
 
 /* ---------------- composer ---------------- */
 .composer { margin: 20px 0 8px; }
@@ -243,6 +260,19 @@ button { font-family: inherit; }
 .due-hint { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .due-edit button { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); background: none; border: none; cursor: pointer; padding: 2px 4px; }
 .due-edit button:hover { color: var(--ink); }
+/* plan day (projectcard.jsx): sun pill + day picker */
+.plan-chip { flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: oklch(0.52 0.10 72); background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 5px; padding: 1px 6px; margin-top: 2px; cursor: pointer; white-space: nowrap; }
+.plan-chip:hover { border-color: oklch(0.70 0.11 72); }
+.plan-edit { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.plan-edit-label { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.plan-days { display: flex; flex-wrap: wrap; gap: 4px; }
+.plan-day { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); background: var(--card); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 6px; cursor: pointer; white-space: nowrap; }
+.plan-day b { font-weight: 500; color: var(--ink); }
+.plan-day:hover { border-color: var(--ink-3); }
+.plan-day.on { background: var(--amber-bg); border-color: oklch(0.70 0.11 72); color: oklch(0.45 0.09 72); }
+.plan-input { font-size: 11.5px; }
+.plan-clear { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); background: none; border: none; cursor: pointer; padding: 2px 4px; }
+.plan-clear:hover { color: var(--ink); }
 .b3-habit-prog { font-size: 13px; color: var(--ink-3); font-style: normal; }
 .habit { margin-top: 6px; }
 .habit-days { display: flex; gap: 5px; }
@@ -449,6 +479,7 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .jr-item-proj { margin-left: auto; font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--ink-3); }
 .jr-goals { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .jr-goal-line { display: flex; align-items: baseline; gap: 9px; font-size: 14px; color: var(--ink-2); text-wrap: pretty; }
+.jr-goal-line.is-sub { padding-left: 21px; font-size: 13px; color: var(--ink-3); }
 .jr-goal-mark { font-size: 12px; flex: none; }
 .jr-goal-mark.hit { color: oklch(0.55 0.09 142); }
 .jr-goal-mark.miss { color: var(--ink-3); }
@@ -494,7 +525,7 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 
 /* ---------------- responsive ---------------- */
 @media (max-width: 880px) {
-  .top-row { grid-template-columns: 1fr; }
+  .top-row { grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "b3" "goals" "today"; }
   .projects { grid-template-columns: 1fr; }
   .appbar-prog { display: none; }
 }

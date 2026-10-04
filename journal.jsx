@@ -1,6 +1,7 @@
 // ============================================================
-// journal.jsx — the backlog: every closed week and every closed
-// 12-week cycle, logged as journal entries in one timeline.
+// journal.jsx — the backlog: every closed week, every closed
+// 12-week cycle, and every finished month's goals, logged as
+// journal entries in one timeline.
 // Each entry can be copied as Markdown — the seam for later piping
 // these into Obsidian / a vector store / shared AI memory.
 // ============================================================
@@ -20,16 +21,30 @@ function weekToMd(h) {
   }
   return s.trim();
 }
+function goalsToMd(goals) {
+  let s = "";
+  goals.forEach(g => {
+    s += `\n- ${g.done ? "✓" : "○"} ${g.text}`;
+    (g.subs || []).forEach(x => { s += `\n  - ${x.done ? "✓" : "○"} ${x.text}`; });
+  });
+  return s;
+}
 function quarterToMd(h) {
   const hit = h.goals.filter(g => g.done).length;
   let s = `## ${h.label} (12 weeks) — ${h.range}  ·  ${hit}/${h.goals.length} goals hit`;
   if (h.closedAt) s += `\n*Closed ${isoDay(h.closedAt)}*`;
   if (h.journal) s += `\n\n**Reflection:**\n${h.journal}`;
-  if (h.goals && h.goals.length) {
-    s += `\n\n**Goals:**`;
-    h.goals.forEach(g => { s += `\n- ${g.done ? "✓" : "○"} ${g.text}`; });
-  }
+  if (h.goals && h.goals.length) s += `\n\n**Goals:**` + goalsToMd(h.goals);
   return s.trim();
+}
+// "2026-10" -> "October 2026"
+function monthName(key) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+function monthToMd(h) {
+  const hit = h.goals.filter(g => g.done).length;
+  return (`## ${monthName(h.key)} (month)  ·  ${hit}/${h.goals.length} goals done` + `\n\n**Goals:**` + goalsToMd(h.goals)).trim();
 }
 
 function CopyBtn({ getText, label = "Copy as Markdown" }) {
@@ -51,23 +66,26 @@ function CopyBtn({ getText, label = "Copy as Markdown" }) {
 
 function Journal({ onClose }) {
   const { state } = window.useFocusStore();
-  const [filter, setFilter] = React.useState("all"); // all | week | quarter
+  const [filter, setFilter] = React.useState("all"); // all | week | quarter | month
 
   const items = React.useMemo(() => {
     const weeks = (state.history || []).map(h => ({ kind: "week", when: h.savedAt || 0, data: h }));
     const quarters = (state.quarterHistory || []).map(h => ({ kind: "quarter", when: h.closedAt || 0, data: h }));
-    let all = [...weeks, ...quarters].sort((a, b) => b.when - a.when);
+    const months = (state.monthHistory || []).map(h => ({ kind: "month", when: h.closedAt || 0, data: h }));
+    let all = [...weeks, ...quarters, ...months].sort((a, b) => b.when - a.when);
     if (filter !== "all") all = all.filter(i => i.kind === filter);
     return all;
-  }, [state.history, state.quarterHistory, filter]);
+  }, [state.history, state.quarterHistory, state.monthHistory, filter]);
 
   const weekCount = (state.history || []).length;
   const qCount = (state.quarterHistory || []).length;
+  const mCount = (state.monthHistory || []).length;
 
   function exportAll() {
     const weeks = (state.history || []).map(h => ({ when: h.savedAt || 0, md: weekToMd(h) }));
     const quarters = (state.quarterHistory || []).map(h => ({ when: h.closedAt || 0, md: quarterToMd(h) }));
-    const body = [...weeks, ...quarters].sort((a, b) => b.when - a.when).map(x => x.md).join("\n\n---\n\n");
+    const months = (state.monthHistory || []).map(h => ({ when: h.closedAt || 0, md: monthToMd(h) }));
+    const body = [...weeks, ...quarters, ...months].sort((a, b) => b.when - a.when).map(x => x.md).join("\n\n---\n\n");
     return `# Focus — Journal\n*Exported ${isoDay(Date.now())}*\n\n${body}`;
   }
 
@@ -83,6 +101,7 @@ function Journal({ onClose }) {
             <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All</button>
             <button className={filter === "week" ? "on" : ""} onClick={() => setFilter("week")}>Weeks{weekCount ? ` (${weekCount})` : ""}</button>
             <button className={filter === "quarter" ? "on" : ""} onClick={() => setFilter("quarter")}>12-week{qCount ? ` (${qCount})` : ""}</button>
+            <button className={filter === "month" ? "on" : ""} onClick={() => setFilter("month")}>Months{mCount ? ` (${mCount})` : ""}</button>
             <button className="cw-x" onClick={onClose}>×</button>
           </div>
         </div>
@@ -90,7 +109,7 @@ function Journal({ onClose }) {
         <div className="cw-body">
           {items.length > 0 && (
             <div className="jr-bar">
-              <span className="jr-bar-note">Every closed week &amp; 12-week cycle, logged. Export to carry it into Obsidian or your own memory later.</span>
+              <span className="jr-bar-note">Every closed week, 12-week cycle &amp; month of goals, logged. Export to carry it into Obsidian or your own memory later.</span>
               <CopyBtn getText={exportAll} label="Export all" />
             </div>
           )}
@@ -104,6 +123,8 @@ function Journal({ onClose }) {
 
           {items.map((it, i) => it.kind === "week" ? (
             <WeekEntry key={"w" + i} h={it.data} />
+          ) : it.kind === "month" ? (
+            <MonthEntry key={"m" + i} h={it.data} />
           ) : (
             <QuarterEntry key={"q" + i} h={it.data} />
           ))}
@@ -146,14 +167,37 @@ function QuarterEntry({ h }) {
         <span className="jr-tally">{hit}/{h.goals.length} hit</span>
       </div>
       {h.journal && <p className="jr-journal">{h.journal}</p>}
-      {h.goals && h.goals.length > 0 && (
-        <div className="jr-goals">
-          {h.goals.map((g, j) => (
-            <div className="jr-goal-line" key={j}><span className={"jr-goal-mark " + (g.done ? "hit" : "miss")}>{g.done ? "✓" : "○"}</span>{g.text}</div>
-          ))}
-        </div>
-      )}
+      {h.goals && h.goals.length > 0 && <GoalLines goals={h.goals} />}
       <div className="jr-entry-foot"><CopyBtn getText={() => quarterToMd(h)} /></div>
+    </div>
+  );
+}
+
+function MonthEntry({ h }) {
+  const hit = h.goals.filter(g => g.done).length;
+  return (
+    <div className="jr-entry jr-entry-q">
+      <div className="jr-entry-head">
+        <span className="jr-kind jr-kind-q">Month</span>
+        <span className="jr-range">{monthName(h.key)}</span>
+        <span className="jr-tally">{hit}/{h.goals.length} done</span>
+      </div>
+      <GoalLines goals={h.goals} />
+      <div className="jr-entry-foot"><CopyBtn getText={() => monthToMd(h)} /></div>
+    </div>
+  );
+}
+
+// goals with their sub-goals tucked under them
+function GoalLines({ goals }) {
+  const line = (g, key, sub) => (
+    <div className={"jr-goal-line" + (sub ? " is-sub" : "")} key={key}>
+      <span className={"jr-goal-mark " + (g.done ? "hit" : "miss")}>{g.done ? "✓" : "○"}</span>{g.text}
+    </div>
+  );
+  return (
+    <div className="jr-goals">
+      {goals.flatMap((g, j) => [line(g, j), ...(g.subs || []).map((x, k) => line(x, j + "." + k, true))])}
     </div>
   );
 }
