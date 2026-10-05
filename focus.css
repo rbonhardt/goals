@@ -148,6 +148,9 @@ button { font-family: inherit; }
 .goal.is-sub .goal-text { font-family: var(--sans); font-size: 13px; line-height: 1.4; color: oklch(0.82 0.008 80); }
 .goal.is-done .goal-text { text-decoration: line-through; text-decoration-color: oklch(0.55 0.01 80); color: oklch(0.62 0.01 80); }
 .goal .inl-ph { color: oklch(0.6 0.01 80); }
+/* the edit box: dark like the tile, so the light goal text stays readable */
+.goal .goal-text.inl-edit { background: oklch(0.34 0.02 60); color: oklch(0.95 0.008 80); text-decoration: none; box-shadow: inset 0 0 0 1.5px var(--gold); }
+.goal .goal-text.inl-edit::placeholder { color: oklch(0.72 0.01 80); font-style: italic; }
 .goal-x { flex: none; background: none; border: none; color: oklch(0.6 0.01 80); font-size: 16px; line-height: 1; padding: 1px 4px; cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; }
 .goal:hover .goal-x, .goal-x:focus-visible { opacity: 1; }
 .goal-x:hover { color: var(--gold); }
