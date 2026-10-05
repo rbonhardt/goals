@@ -93,6 +93,12 @@ function normGoal(g) {
   return { id: o.id || uid(), text: String(o.text || ""), done: !!o.done,
     subs: (Array.isArray(o.subs) ? o.subs : []).map(s => ({ id: (s && s.id) || uid(), text: String((s && s.text) || ""), done: !!(s && s.done) })) };
 }
+// A blank line (Enter, then nothing typed) doesn't outlive a reload. A blank
+// goal still holding sub-goals stays, so they aren't lost with it.
+function tidyGoals(goals) {
+  return goals.map(g => ({ ...g, subs: g.subs.filter(x => x.text.trim()) }))
+    .filter(g => g.text.trim() || g.subs.length);
+}
 // "YYYY-MM" for the local calendar month
 function monthKey(iso = todayISO()) { return iso.slice(0, 7); }
 // The month list belongs to one calendar month. On the 1st the old list is
@@ -186,9 +192,9 @@ function migrate(s) {
   // Goals tile added later: quarter goals were plain strings (see normGoal);
   // the month list is new
   if (!s.quarter) s.quarter = { label: "Q?", range: "", goals: [] };
-  s.quarter.goals = (Array.isArray(s.quarter.goals) ? s.quarter.goals : []).map(normGoal).filter(g => g.text.trim());
+  s.quarter.goals = tidyGoals((Array.isArray(s.quarter.goals) ? s.quarter.goals : []).map(normGoal));
   if (!s.month || !Array.isArray(s.month.goals)) s.month = { key: monthKey(), goals: [] };
-  s.month.goals = s.month.goals.map(normGoal);
+  s.month.goals = tidyGoals(s.month.goals.map(normGoal));
   if (!Array.isArray(s.monthHistory)) s.monthHistory = [];
   s.scheduled.forEach(it => {
     if (!it.cadence) it.cadence = "weekly";
@@ -501,6 +507,72 @@ function applyAction(state, action) {
       if (!at) return state;
       return at.put(at.list.filter(g => g.id !== A.id)
         .map(g => g.subs.some(x => x.id === A.id) ? { ...g, subs: g.subs.filter(x => x.id !== A.id) } : g));
+    }
+    case "GOAL_INSERT": {
+      // Enter on a goal: a blank line at A.index among the goals or, with
+      // A.parentId, among that goal's sub-goals. It opens for typing; left
+      // blank it is deleted (see GoalRow), and migrate drops any that slip by.
+      const at = goalTarget(state, A);
+      if (!at || !A.id) return state;
+      const item = { id: A.id, text: "", done: false };
+      if (!A.parentId) return at.put(insertAt(at.list, A.index, [{ ...item, subs: [] }]));
+      if (!at.list.some(g => g.id === A.parentId)) return state;
+      return at.put(at.list.map(g => g.id === A.parentId ? { ...g, subs: insertAt(g.subs, A.index, [item]) } : g));
+    }
+    case "GOAL_INDENT": {
+      // Tab: a goal becomes the last sub-goal of the goal above it. Its own
+      // sub-goals follow it there (one level only), so no row moves on screen.
+      const at = goalTarget(state, A);
+      if (!at) return state;
+      const gi = at.list.findIndex(g => g.id === A.id);
+      if (gi <= 0) return state; // a sub-goal already, or nothing above it
+      const g = at.list[gi], prev = at.list[gi - 1];
+      const subs = [...prev.subs, { id: g.id, text: g.text, done: g.done }, ...g.subs];
+      return at.put(at.list.filter(x => x !== g).map(x => x === prev ? { ...prev, subs } : x));
+    }
+    case "GOAL_OUTDENT": {
+      // Shift+Tab: a sub-goal becomes a goal right after its parent and takes
+      // the sub-goals below it as its own, so no row moves on screen
+      const at = goalTarget(state, A);
+      if (!at) return state;
+      const pi = at.list.findIndex(g => g.subs.some(x => x.id === A.id));
+      if (pi < 0) return state;
+      const p = at.list[pi], si = p.subs.findIndex(x => x.id === A.id);
+      const out = at.list.slice();
+      out.splice(pi, 1, { ...p, subs: p.subs.slice(0, si) }, { ...p.subs[si], subs: p.subs.slice(si + 1) });
+      return at.put(out);
+    }
+    case "GOAL_MOVE": {
+      // drag to re-sort: A.id lands at A.toIndex among the goals or, with
+      // A.parentId, among that goal's sub-goals. So a goal dropped into
+      // another becomes its sub-goal (its own sub-goals follow it — one level
+      // only, as with Tab), and a sub-goal dropped between goals becomes a
+      // goal. The index is read against the rendered list, so a move down
+      // its own list loses one — same as TODAY_MOVE.
+      const at = goalTarget(state, A);
+      if (!at) return state;
+      const list = at.list;
+      const gi = list.findIndex(g => g.id === A.id);
+      const from = gi >= 0 ? null : list.find(g => g.subs.some(x => x.id === A.id));
+      if (gi < 0 && !from) return state;
+      if (gi >= 0 && !A.parentId) {
+        const out = moveInList(list, gi, A.toIndex);
+        return out ? at.put(out) : state;
+      }
+      if (from && from.id === A.parentId) {
+        const subs = moveInList(from.subs, from.subs.findIndex(x => x.id === A.id), A.toIndex);
+        return subs ? at.put(list.map(g => g === from ? { ...g, subs } : g)) : state;
+      }
+      if (A.parentId) {
+        if (A.parentId === A.id || !list.some(g => g.id === A.parentId)) return state;
+        const g = list[gi], item = from && from.subs.find(x => x.id === A.id);
+        const moved = g ? [{ id: g.id, text: g.text, done: g.done }, ...g.subs] : [item];
+        const rest = g ? list.filter(x => x !== g) : list.map(x => x === from ? { ...x, subs: x.subs.filter(y => y !== item) } : x);
+        return at.put(rest.map(x => x.id === A.parentId ? { ...x, subs: insertAt(x.subs, A.toIndex, moved) } : x));
+      }
+      const item = from.subs.find(x => x.id === A.id);
+      const rest = list.map(x => x === from ? { ...x, subs: x.subs.filter(y => y !== item) } : x);
+      return at.put(insertAt(rest, A.toIndex, [{ ...item, subs: [] }]));
     }
 
     // ---- tasks ----
@@ -893,6 +965,24 @@ function goalTarget(state, A) {
   const i = A.key && A.key !== state.month.key ? hist.findIndex(h => h.key === A.key) : -1;
   if (i < 0) return { list: state.month.goals, put: (goals) => ({ ...state, month: { ...state.month, goals } }) };
   return { list: hist[i].goals, put: (goals) => ({ ...state, monthHistory: hist.map((h, j) => j === i ? { ...h, goals } : h) }) };
+}
+// arr with items spliced in at index (null: the end)
+function insertAt(arr, index, items) {
+  const out = arr.slice();
+  out.splice(index == null ? out.length : Math.max(0, Math.min(index, out.length)), 0, ...items);
+  return out;
+}
+// arr with the item at `from` moved to `toIndex` (read with the item still in
+// place, like TODAY_MOVE), or null when it would not move — so a no-op drop
+// hands back the same state and triggers no sync push
+function moveInList(arr, from, toIndex) {
+  const out = arr.slice();
+  const [it] = out.splice(from, 1);
+  const want = toIndex == null ? out.length : toIndex > from ? toIndex - 1 : toIndex;
+  const idx = Math.max(0, Math.min(want, out.length));
+  if (idx === from) return null;
+  out.splice(idx, 0, it);
+  return out;
 }
 // transform the one goal or sub-goal with this id
 function mapGoal(goals, id, fn) {

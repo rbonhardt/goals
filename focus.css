@@ -121,8 +121,24 @@ button { font-family: inherit; }
 .goals-eyebrow { flex: 1; color: var(--gold); line-height: 1.4; }
 .goals-left { font-family: var(--mono); font-size: 10.5px; color: oklch(0.72 0.01 80); white-space: nowrap; }
 .goals-list { margin-top: 8px; display: flex; flex-direction: column; }
-.goal { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
+.goal { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; position: relative; }
 .goal.is-sub { padding-left: 26px; }
+/* drag to re-sort: the grip hangs in the tile's left padding (a sub-goal's
+   sits in its indent); the drop line is gold, indented for a sub-goal */
+.goal-grip { position: absolute; left: -15px; top: 6px; width: 10px; color: oklch(0.55 0.015 70); font-size: 11px; line-height: 1; letter-spacing: -2px; cursor: grab; opacity: 0; transition: opacity .15s; user-select: none; }
+.goal.is-sub .goal-grip { left: 11px; top: 5px; }
+.goal:hover .goal-grip { opacity: 1; }
+@media (hover: none) { .goal-grip { opacity: .45; } }
+.goal.dragging { opacity: .4; }
+.goal.drop-before::before, .goal.drop-after::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px;
+  background: var(--gold); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.goal.drop-before::before { top: -1px; }
+.goal.drop-after::after { bottom: -1px; }
+.goal.drop-sub::before, .goal.drop-sub::after { left: 26px; }
+/* dropping *into* a goal: the goal lights up instead of a line */
+.goal.drop-into { background: oklch(0.74 0.094 78 / .16); box-shadow: 0 0 0 4px oklch(0.74 0.094 78 / .16); border-radius: 4px; }
 .goal-box { flex: none; position: relative; width: 16px; height: 16px; margin-top: 3px; padding: 0; border-radius: 50%; border: 1.5px solid oklch(0.6 0.02 70); background: none; cursor: pointer; transition: border-color .15s, background .15s; }
 .goal.is-sub .goal-box { width: 14px; height: 14px; margin-top: 2px; }
 .goal-box:hover { border-color: var(--gold); }
