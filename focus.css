@@ -626,6 +626,20 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .today-title { font-family: var(--serif); font-size: 25px; font-weight: 500; margin: 0; letter-spacing: -.01em; line-height: 1.1; }
 .today-sub { display: block; font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--ink-3); margin-top: 2px; }
 .today-count { padding-top: 6px; white-space: nowrap; }
+/* day tabs, Monday to Sunday: pick a day to plan it, or drop a row on one */
+.today-tabs { display: flex; gap: 4px; margin: 14px 0 2px; }
+.today-tab { position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 2px 7px; background: none; border: 1px solid transparent; border-radius: 9px; color: var(--ink-3); cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+.today-tab-wd { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.today-tab-date { font-family: var(--serif); font-size: 18px; line-height: 1.1; color: var(--ink-2); }
+.today-tab:hover { background: var(--paper-2); }
+.today-tab.on { background: var(--paper); border-color: var(--line-2); color: var(--ink); }
+.today-tab.on .today-tab-date { color: var(--ink); }
+.today-tab.is-today .today-tab-wd { color: oklch(0.55 0.11 72); }
+.today-tab.is-past { opacity: .4; cursor: default; }
+.today-tab.is-past:hover { background: none; }
+.today-tab.drop-on { background: var(--amber-bg); border-color: var(--amber-line); }
+.today-tab-n { position: absolute; bottom: 7px; right: 6px; font-family: var(--mono); font-size: 9.5px; line-height: 1; color: oklch(0.55 0.11 72); }
+.today-tab:focus-visible { outline: 1.5px solid var(--clay); outline-offset: 1px; }
 .today-list { margin-top: 10px; display: flex; flex-direction: column; }
 .today-row { display: flex; align-items: center; gap: 12px; padding: 10px 8px 10px 0; border-top: 1px solid var(--line); position: relative; border-radius: 8px; }
 .today-row:first-child { border-top: none; }

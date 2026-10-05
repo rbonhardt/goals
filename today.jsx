@@ -4,35 +4,77 @@
 // live items, so a check-off or edit here shows on the card and vice versa.
 // A type-to-add line sits under the open rows: new to-dos go onto a card's
 // This week lane, and Tab makes the line a step of the task above it.
+// Day tabs (Monday to Sunday) sit over the list: pick one to see and fill
+// that day's plan, or drop a row on a tab to move it to that day. A day's
+// plan joins Today that morning (see planToday in store.jsx).
 // ============================================================
+
+// The week the tabs show: this one, Monday to Sunday — or, once it has been
+// closed early (the app's week already starts next Monday, say on a Sunday
+// evening), next week, so there are days left to plan.
+function tabWeek(state, today) {
+  const mon = window.addDaysISO(today, -window.weekdayIdx(today));
+  const next = window.addDaysISO(mon, 7);
+  const start = state.week.startISO === next ? next : mon;
+  return [0, 1, 2, 3, 4, 5, 6].map(n => window.addDaysISO(start, n));
+}
+const dayName = (iso, weekday) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { weekday });
+
 function Today() {
   const { state, dispatch } = window.useFocusStore();
-  const rows = window.selToday(state);
-  // drop : null | insertion index
+  const today = window.todayISO();
+  const week = tabWeek(state, today);
+  // today stays reachable when the tabs show next week
+  const tabs = week.includes(today) ? week : [today, ...week];
+  // the day on screen: one picked from the tabs, else Today. A picked day
+  // that has come round (a page left open overnight) is just Today.
+  const [picked, setPicked] = React.useState(null);
+  const day = picked && picked > today && week.includes(picked) ? picked : today;
+  const isToday = day === today;
+  const rows = window.selDay(state, day);
+  // drop : null | insertion index; tabOver : the tab a drag is over
   const [drop, setDrop] = React.useState(null);
+  const [tabOver, setTabOver] = React.useState(null);
   const [dragKey, setDragKey] = React.useState(null);
   const ref = React.useRef(null);
 
   const doneCount = rows.filter(r => r.done).length;
-  const dateLabel = new Date(window.todayISO() + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const dateLabel = new Date(day + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
 
-  function startDrag(e, key) {
+  function startDrag(e, r) {
     e.stopPropagation();
     // one kind of drag at a time — clear the card-level globals
     window.DRAG = { taskId: null }; window.SUBDRAG = null; window.DRAGCARD = null;
-    window.TODAYDRAG = key;
-    setDragKey(key);
+    window.TODAYDRAG = { key: r.key, taskId: r.taskId, subId: r.subId, day };
+    setDragKey(r.key);
     e.dataTransfer.effectAllowed = "move";
-    try { e.dataTransfer.setData("text/plain", key); } catch (x) {}
+    try { e.dataTransfer.setData("text/plain", r.key); } catch (x) {}
+  }
+  function endDrag() {
+    window.TODAYDRAG = null; window.SUBDRAG = null; window.DRAG = { taskId: null };
+    setDragKey(null); setDrop(null); setTabOver(null);
   }
 
-  // Anything draggable in the app can land here: a Today row (reorder), a
-  // task row, or a step row (both add). Card drags carry their own globals.
+  // Anything draggable in the app can land here: a row of this list
+  // (reorder), a task row, or a step row (both add). Card drags carry their
+  // own globals.
   function incoming() {
-    if (window.TODAYDRAG) return { kind: "today", key: window.TODAYDRAG };
-    if (window.SUBDRAG) return { kind: "sub", taskId: window.SUBDRAG.taskId, subId: window.SUBDRAG.subId };
-    if (window.DRAG && window.DRAG.taskId) return { kind: "task", taskId: window.DRAG.taskId };
+    if (window.TODAYDRAG) return window.TODAYDRAG;
+    if (window.SUBDRAG) return { taskId: window.SUBDRAG.taskId, subId: window.SUBDRAG.subId };
+    if (window.DRAG && window.DRAG.taskId) return { taskId: window.DRAG.taskId, subId: null };
     return null;
+  }
+  // The action that lands drag `d` on day `target` at `toIndex` (null: the
+  // end), or null when it can't land there: a day gone by, a habit on a day
+  // ahead (habits keep no plan day), or a Today row onto the Today tab.
+  function landing(d, target, toIndex) {
+    if (!d || target < today) return null;
+    if (target === today) {
+      if (d.key && d.day === today) return toIndex == null ? null : { type: "TODAY_MOVE", key: d.key, toIndex };
+      return { type: "TODAY_ADD", taskId: d.taskId, subId: d.subId, toIndex };
+    }
+    if (!d.subId && state.projects.some(p => p.tasks.some(t => t.id === d.taskId && t.type === "habit"))) return null;
+    return { type: "PLAN_ADD", taskId: d.taskId, subId: d.subId, day: target, toIndex };
   }
 
   function computeDrop(e) {
@@ -47,25 +89,41 @@ function Today() {
   }
 
   function onDragOver(e) {
-    if (!incoming()) return;
+    if (!landing(incoming(), day, 0)) return;
     e.preventDefault();
     setDrop(computeDrop(e));
   }
 
   function onDrop(e) {
-    const d = incoming();
-    setDrop(null);
-    if (!d) return;
-    e.preventDefault();
-    e.stopPropagation();
     // recompute from the drop event — the cursor may have moved since the
     // last dragover, and stale hover state must never pick the slot
-    const idx = computeDrop(e);
-    if (d.kind === "today") dispatch({ type: "TODAY_MOVE", key: d.key, toIndex: idx });
-    else if (d.kind === "sub") dispatch({ type: "TODAY_ADD", taskId: d.taskId, subId: d.subId, toIndex: idx });
-    else dispatch({ type: "TODAY_ADD", taskId: d.taskId, subId: null, toIndex: idx });
-    window.TODAYDRAG = null; window.SUBDRAG = null; window.DRAG = { taskId: null };
-    setDragKey(null);
+    const act = landing(incoming(), day, computeDrop(e));
+    setDrop(null);
+    if (!act) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dispatch(act);
+    endDrag();
+  }
+
+  // A tab takes a drop too: the row goes on the end of that day's list, and
+  // the tab on screen stays put, so a run of rows can be sent out in turn.
+  // Its events stop here, so the list below shows no drop line meanwhile.
+  function tabDragOver(e, iso) {
+    e.stopPropagation();
+    setDrop(null);
+    if (!landing(incoming(), iso, null)) return;
+    e.preventDefault();
+    setTabOver(iso);
+  }
+  function tabDrop(e, iso) {
+    e.stopPropagation();
+    const act = landing(incoming(), iso, null);
+    setTabOver(null);
+    if (!act) return;
+    e.preventDefault();
+    dispatch(act);
+    endDrag();
   }
 
   // Open rows come first (the store keeps them there); the add line sits
@@ -80,36 +138,65 @@ function Today() {
   });
   // One keyed list, add line included: a row crossing into the finished pile
   // is moved, not rebuilt, so it keeps keyboard focus.
+  // the add line is keyed by day, so a draft or a pending step doesn't follow
+  // the tabs to another day
   const items = rows.map((r, i) => renderRow(r, i));
   if (state.projects.length > 0)
-    items.splice(openCount, 0, <TodayAdd key="__add" above={rows[openCount - 1] || null} projects={state.projects} />);
+    items.splice(openCount, 0, <TodayAdd key={"__add" + day} day={isToday ? null : day} above={rows[openCount - 1] || null} projects={state.projects} />);
   if (rows.length === 0) items.unshift(
     <div key="__empty" className={"today-empty" + (drop != null ? " drop-before" : "")} data-row>
-      Nothing picked yet — type one in, hit <span className="today-sun">☀</span> on any task or step below, or drag one up here.
+      {isToday
+        ? <>Nothing picked yet — type one in, hit <span className="today-sun">☀</span> on any task or step below, or drag one up here.</>
+        : <>Nothing planned yet — type one in, or drag a task or step here or onto this tab.</>}
     </div>
   );
   function renderRow(r, i) {
     return (
-      <TodayRow key={r.key} row={r} index={i} nested={nested[i]}
+      <TodayRow key={r.key} row={r} index={i} nested={nested[i]} day={isToday ? null : day}
         dragging={dragKey === r.key}
         dropBefore={drop === i}
         dropAfter={drop === rows.length && i === rows.length - 1}
-        onDragStart={(e) => startDrag(e, r.key)}
-        onDragEnd={() => { window.TODAYDRAG = null; setDragKey(null); setDrop(null); }} />
+        onDragStart={(e) => startDrag(e, r)}
+        onDragEnd={endDrag} />
     );
   }
 
   return (
     <section className={"today" + (drop != null ? " today-over" : "")}
       onDragOver={onDragOver}
-      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrop(null); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setDrop(null); setTabOver(null); } }}
       onDrop={onDrop}>
       <div className="today-head">
         <div>
-          <h2 className="today-title">Today</h2>
-          <span className="today-sub">{dateLabel} · the top three are the day's big three</span>
+          <h2 className="today-title">{isToday ? "Today" : dayName(day, "long")}</h2>
+          <span className="today-sub">{isToday
+            ? dateLabel + " · the top three are the day's big three"
+            : dateLabel + " · moves onto Today that morning"}</span>
         </div>
-        <span className="eyebrow today-count">{doneCount}/{rows.length} done</span>
+        <span className="eyebrow today-count">{isToday ? doneCount + "/" + rows.length + " done" : rows.length + " planned"}</span>
+      </div>
+
+      <div className="today-tabs" role="tablist" aria-label="Day">
+        {tabs.map(iso => {
+          const past = iso < today, on = iso === day;
+          // open rows waiting on a day ahead, as a small count on its tab
+          const waiting = iso > today ? window.selDay(state, iso).filter(r => !r.done).length : 0;
+          const date = new Date(iso + "T00:00:00");
+          return (
+            <button key={iso} type="button" role="tab" aria-selected={on} aria-disabled={past || null}
+              className={"today-tab" + (on ? " on" : "") + (iso === today ? " is-today" : "") + (past ? " is-past" : "") + (tabOver === iso ? " drop-on" : "")}
+              title={past ? dayName(iso, "long") + " has gone by — what was left moved to Today"
+                : iso === today ? "Today" : dayName(iso, "long") + (waiting ? " — " + waiting + " planned" : "") + ". Drop a row here to move it to this day"}
+              onClick={() => { if (!past) setPicked(iso === today ? null : iso); }}
+              onDragOver={(e) => tabDragOver(e, iso)}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setTabOver(null); }}
+              onDrop={(e) => tabDrop(e, iso)}>
+              <span className="today-tab-wd">{week.includes(today) || iso !== today ? dayName(iso, "short") : "Today"}</span>
+              <span className="today-tab-date">{date.getDate()}</span>
+              {waiting > 0 && <span className="today-tab-n">{waiting}</span>}
+            </button>
+          );
+        })}
       </div>
 
       <div className="today-list" ref={ref}>
@@ -119,7 +206,8 @@ function Today() {
   );
 }
 
-function TodayRow({ row, index, nested, dragging, dropBefore, dropAfter, onDragStart, onDragEnd }) {
+// `day` is set on a day ahead, null on Today
+function TodayRow({ row, index, nested, day, dragging, dropBefore, dropAfter, onDragStart, onDragEnd }) {
   const { state, dispatch } = window.useFocusStore();
   const { task, sub, project } = row;
   const isHabit = !sub && task.type === "habit";
@@ -167,8 +255,8 @@ function TodayRow({ row, index, nested, dragging, dropBefore, dropAfter, onDragS
           </span>
         )}
       </div>
-      <button className="today-remove" title="Remove from Today (stays on its card)"
-        onClick={() => dispatch({ type: "TODAY_REMOVE", taskId: task.id, subId: sub ? sub.id : null })}>×</button>
+      <button className="today-remove" title={"Remove from " + (day ? dayName(day, "long") : "Today") + " (stays on its card)"}
+        onClick={() => dispatch({ type: day ? "PLAN_REMOVE" : "TODAY_REMOVE", taskId: task.id, subId: sub ? sub.id : null })}>×</button>
     </div>
   );
 }
@@ -193,8 +281,9 @@ function CardPick({ project, projects, onPick }) {
 // the next one. Tab makes the line a step of the task above it (the row above,
 // or that row's own task when it is a step); Shift+Tab, or Backspace on an
 // empty line, turns it back. A new to-do goes on the picked card — by default
-// the card of the row above — and always on its This week lane.
-function TodayAdd({ above, projects }) {
+// the card of the row above — and always on its This week lane. On a day
+// ahead (`day` set) it lands on that day's list rather than Today's.
+function TodayAdd({ day, above, projects }) {
   const { dispatch } = window.useFocusStore();
   const [text, setText] = React.useState("");
   // the task a step will land on — pinned when the line is nested, so a list
@@ -221,8 +310,8 @@ function TodayAdd({ above, projects }) {
     const v = text.trim();
     if (!v) return;
     dispatch(step
-      ? { type: "TODAY_NEW", text: v, parentTaskId: parent.id }
-      : { type: "TODAY_NEW", text: v, projectId: card.id });
+      ? { type: "TODAY_NEW", text: v, parentTaskId: parent.id, day }
+      : { type: "TODAY_NEW", text: v, projectId: card.id, day });
     setText("");
   }
 
@@ -260,7 +349,7 @@ function TodayAdd({ above, projects }) {
       <div className="today-textwrap">
         <input ref={inputRef} className="today-add-input" value={text}
           placeholder={step ? "Add a step…" : "Add a to-do…"}
-          aria-label={step ? "Add a step to " + parent.text : "Add a to-do for today"}
+          aria-label={step ? "Add a step to " + parent.text : "Add a to-do for " + (day ? dayName(day, "long") : "today")}
           onChange={(e) => setText(e.target.value)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
