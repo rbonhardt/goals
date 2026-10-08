@@ -545,22 +545,32 @@ function reducer(state, action) {
   const timer = action.type === "DUE_TICK";
   const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
   const next = sinkDone(applyAction(base, action));
-  if (action.type === "HYDRATE") return rollDay(next);
+  // A pull replaces the state wholesale; the outbox here may hold check-offs
+  // the server copy never saw, so it survives (ours win on the same id).
+  if (action.type === "HYDRATE") return keepHubOutbox(state, rollDay(next));
   return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next);
 }
 
+function keepHubOutbox(prev, next) {
+  const mine = prev.hubOutbox || [];
+  if (!mine.length) return next;
+  const ids = new Set(mine.map(c => c.id));
+  return { ...next, hubOutbox: [...(next.hubOutbox || []).filter(c => !ids.has(c.id)), ...mine] };
+}
+
 // A linked task can leave the list (close week, delete, project deleted)
-// with a check-off the Hub hasn't had yet. Keep that change in the outbox
-// until a sync delivers it — otherwise the Hub never hears, and the next
-// sync brings the task back as open. HUB_SYNC's own removals (gone from the
-// Hub) are not pending work, so it skips this.
+// with a check-off the Hub hasn't had yet — or while a sync that carries an
+// older state of it is still in flight. So its final done state always goes
+// to the outbox, and the next sync sends it (a no-op when the Hub already
+// agrees). Until then the task can't be re-imported. HUB_SYNC's own removals
+// (gone from the Hub) are not pending work, so it skips this.
 function withHubOutbox(prev, next) {
   if (prev.projects === next.projects) return next;
   const still = new Set();
   next.projects.forEach(p => p.tasks.forEach(t => { if (t.hub) still.add(t.hub.id); }));
   const add = [];
   prev.projects.forEach(p => p.tasks.forEach(t => {
-    if (t.hub && !still.has(t.hub.id) && (t.status === "done") !== t.hub.done) add.push({ id: t.hub.id, done: t.status === "done" });
+    if (t.hub && !still.has(t.hub.id)) add.push({ id: t.hub.id, done: t.status === "done" });
   }));
   if (!add.length) return next;
   const ids = new Set(add.map(c => c.id));

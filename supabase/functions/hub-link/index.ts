@@ -29,7 +29,7 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:8123", // goals-static preview
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_ITEMS = 500;
+const MAX_ITEMS = 2000; // linked tasks leave Focus at Close week, so real use stays far below
 
 function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
