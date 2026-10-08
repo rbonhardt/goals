@@ -14,13 +14,17 @@
 // in this page (see supabase/functions/hub-link).
 // ============================================================
 
-// Linked tasks whose done state here differs from what the Hub said last
-// time: the check-offs (and un-checks) still to send.
+// The check-offs (and un-checks) still to send: linked tasks whose done
+// state differs from what the Hub said last time, plus the outbox — changes
+// on tasks that left the list before they were sent (close week, delete).
 function hubPendingChanges(state) {
-  const out = [];
+  const out = [], seen = new Set();
   state.projects.forEach(p => p.tasks.forEach(t => {
-    if (t.hub && (t.status === "done") !== t.hub.done) out.push({ id: t.hub.id, done: t.status === "done" });
+    if (!t.hub) return;
+    seen.add(t.hub.id);
+    if ((t.status === "done") !== t.hub.done) out.push({ id: t.hub.id, done: t.status === "done" });
   }));
+  (state.hubOutbox || []).forEach(c => { if (!seen.has(c.id)) out.push({ id: c.id, done: c.done }); });
   return out;
 }
 
@@ -43,12 +47,15 @@ function useHubLink() {
     busy.current = true;
     try {
       const s = stateRef.current;
+      const changes = hubPendingChanges(s);
       const { data, error } = await window.supaClient.functions.invoke("hub-link", {
-        body: { changes: hubPendingChanges(s), known: hubKnownIds(s) },
+        body: { changes, known: hubKnownIds(s) },
       });
       if (error) throw error;
       if (data && Array.isArray(data.tasks)) {
-        dispatch({ type: "HUB_SYNC", tasks: data.tasks, gone: Array.isArray(data.gone) ? data.gone : [] });
+        // `sent` tells the merge exactly what the Hub was asked to do, so a
+        // check made while this was in flight isn't mistaken for the Hub's.
+        dispatch({ type: "HUB_SYNC", tasks: data.tasks, gone: Array.isArray(data.gone) ? data.gone : [], sent: changes });
       }
     } catch (e) {
       // Offline or the link is down: the changes stay pending and go next time.

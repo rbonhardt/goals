@@ -20,6 +20,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const HUB_URL = (Deno.env.get("HUB_URL") ?? "").replace(/\/+$/, "");
 const HUB_ANON_KEY = Deno.env.get("HUB_ANON_KEY") ?? "";
 const HUB_LINK_SECRET = Deno.env.get("HUB_LINK_SECRET") ?? "";
+// Anyone can sign in to Focus (Google / magic link) and get their own
+// app_state row, so owning a row is not enough: only Ryan's account may sync.
+const OWNER_EMAIL = (Deno.env.get("FOCUS_OWNER_EMAIL") ?? "rbonhardt@gmail.com").toLowerCase();
 
 const ALLOWED_ORIGINS = new Set([
   "https://goals.ryanbonhardt.com",
@@ -46,28 +49,34 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
   if (!HUB_URL || !HUB_ANON_KEY || !HUB_LINK_SECRET) return json({ error: "hub link is not set up" }, 500);
 
-  // Who is calling: must be signed in, and must own the Focus data
-  // (single-user app: the one app_state row).
+  // Who is calling: must be signed in as Ryan (confirmed email), and own
+  // Focus data.
   const jwt = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!jwt) return json({ error: "sign in first" }, 401);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: auth, error: authErr } = await admin.auth.getUser(jwt);
   if (authErr || !auth?.user) return json({ error: "sign in first" }, 401);
+  if ((auth.user.email ?? "").toLowerCase() !== OWNER_EMAIL || !auth.user.email_confirmed_at) {
+    return json({ error: "not allowed" }, 403);
+  }
   const { data: owner, error: ownerErr } = await admin
     .from("app_state").select("user_id").eq("user_id", auth.user.id).maybeSingle();
   if (ownerErr) return json({ error: ownerErr.message }, 500);
   if (!owner) return json({ error: "not allowed" }, 403);
 
   const body = await req.json().catch(() => null);
+  // Too many to send in one go: say so, rather than drop some silently.
+  if ((Array.isArray(body?.changes) && body.changes.length > MAX_ITEMS)
+      || (Array.isArray(body?.known) && body.known.length > MAX_ITEMS)) {
+    return json({ error: `more than ${MAX_ITEMS} linked tasks` }, 413);
+  }
   const changes = (Array.isArray(body?.changes) ? body.changes : [])
     .filter((c: unknown): c is { id: string; done: boolean } =>
       !!c && typeof (c as { id?: unknown }).id === "string" && UUID.test((c as { id: string }).id)
       && typeof (c as { done?: unknown }).done === "boolean")
-    .slice(0, MAX_ITEMS)
     .map((c: { id: string; done: boolean }) => ({ id: c.id, done: c.done }));
   const known = (Array.isArray(body?.known) ? body.known : [])
-    .filter((id: unknown): id is string => typeof id === "string" && UUID.test(id))
-    .slice(0, MAX_ITEMS);
+    .filter((id: unknown): id is string => typeof id === "string" && UUID.test(id));
 
   const res = await fetch(`${HUB_URL}/rest/v1/rpc/focus_link_sync`, {
     method: "POST",

@@ -199,6 +199,9 @@ function migrate(s) {
   // Employee Hub link added later: Hub task ids deleted here on purpose, so
   // the next sync doesn't bring them back (see HUB_SYNC)
   if (!Array.isArray(s.hubIgnored)) s.hubIgnored = [];
+  // check-offs on linked tasks that left the list before they reached the
+  // Hub: [{ id, done }] (see withHubOutbox)
+  if (!Array.isArray(s.hubOutbox)) s.hubOutbox = [];
   // day tabs added later: a list per day ahead (see planToday)
   if (!s.plans || typeof s.plans !== "object" || Array.isArray(s.plans)) s.plans = {};
   s.scheduled.forEach(it => {
@@ -542,7 +545,26 @@ function reducer(state, action) {
   const timer = action.type === "DUE_TICK";
   const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
   const next = sinkDone(applyAction(base, action));
-  return action.type === "HYDRATE" ? rollDay(next) : next;
+  if (action.type === "HYDRATE") return rollDay(next);
+  return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next);
+}
+
+// A linked task can leave the list (close week, delete, project deleted)
+// with a check-off the Hub hasn't had yet. Keep that change in the outbox
+// until a sync delivers it — otherwise the Hub never hears, and the next
+// sync brings the task back as open. HUB_SYNC's own removals (gone from the
+// Hub) are not pending work, so it skips this.
+function withHubOutbox(prev, next) {
+  if (prev.projects === next.projects) return next;
+  const still = new Set();
+  next.projects.forEach(p => p.tasks.forEach(t => { if (t.hub) still.add(t.hub.id); }));
+  const add = [];
+  prev.projects.forEach(p => p.tasks.forEach(t => {
+    if (t.hub && !still.has(t.hub.id) && (t.status === "done") !== t.hub.done) add.push({ id: t.hub.id, done: t.status === "done" });
+  }));
+  if (!add.length) return next;
+  const ids = new Set(add.map(c => c.id));
+  return { ...next, hubOutbox: [...(next.hubOutbox || []).filter(c => !ids.has(c.id)), ...add] };
 }
 
 function applyAction(state, action) {
@@ -826,16 +848,20 @@ function applyAction(state, action) {
     // A.tasks: Ryan's Hub tasks — every open one, plus any already linked
     // here — as { id, title, note, due, done, project, section }. A.gone: linked
     // ids the Hub no longer gives Ryan (deleted, or given to someone else).
+    // A.sent: the [{ id, done }] this sync asked the Hub to apply.
     // A linked task carries t.hub = { id, title, due, done }: what the Hub
     // said last time. A field that differs from that snapshot was changed on
     // the side that differs, so each side's own edits survive:
-    //  • done: changed here (not yet sent) → keep ours; else take the Hub's
+    //  • done: differs from what was sent (or, if nothing was sent, from the
+    //    snapshot) → changed here meanwhile: keep ours, it goes next sync;
+    //    else take the Hub's
     //  • title / due: changed in the Hub → take the Hub's; else keep ours
     // New open Hub tasks go to the Motion project's queue (a due date ≤ 10
     // days out promotes them to This Week, like any task).
     case "HUB_SYNC": {
       const byId = new Map(A.tasks.map(h => [h.id, h]));
       const gone = new Set(A.gone || []);
+      const sent = new Map((A.sent || []).map(c => [c.id, c.done]));
       const linked = new Set();
       let changed = false;
       let projects = state.projects.map(p => {
@@ -854,7 +880,8 @@ function applyAction(state, action) {
           }
           const due = h.due || null;
           const localDone = t.status === "done";
-          const status = localDone !== t.hub.done ? t.status
+          const asked = sent.has(id) ? sent.get(id) : t.hub.done;
+          const status = localDone !== asked ? t.status
             : h.done ? "done" : localDone ? "todo" : t.status;
           const next = { ...t, status,
             text: h.title !== t.hub.title ? h.title : t.text,
@@ -870,8 +897,14 @@ function applyAction(state, action) {
       });
       if (projects.some((p, i) => p !== state.projects[i])) changed = true;
 
+      // Outbox: drop what this sync delivered (or what the Hub no longer
+      // gives Ryan); anything still waiting keeps its task from coming back.
+      const outbox = (state.hubOutbox || []).filter(c => !gone.has(c.id) && !(sent.has(c.id) && sent.get(c.id) === c.done));
+      if (outbox.length !== (state.hubOutbox || []).length) changed = true;
+      const waiting = new Set(outbox.map(c => c.id));
+
       const ignored = new Set(state.hubIgnored || []);
-      const fresh = A.tasks.filter(h => !h.done && !linked.has(h.id) && !ignored.has(h.id));
+      const fresh = A.tasks.filter(h => !h.done && !linked.has(h.id) && !ignored.has(h.id) && !waiting.has(h.id));
       if (fresh.length) {
         const reset7 = [false, false, false, false, false, false, false];
         const add = fresh.map(h => {
@@ -894,7 +927,7 @@ function applyAction(state, action) {
       const hubIgnored = (state.hubIgnored || []).filter(id => stillOpen.has(id));
       if (hubIgnored.length !== (state.hubIgnored || []).length) changed = true;
 
-      return changed ? { ...state, projects, hubIgnored } : state;
+      return changed ? { ...state, projects, hubIgnored, hubOutbox: outbox } : state;
     }
 
     case "MOVE_TASK": {
