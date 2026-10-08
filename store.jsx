@@ -565,13 +565,13 @@ let hubInflight = new Map();
 function setHubInflight(changes) { hubInflight = new Map((changes || []).map(c => [c.id, c.done])); }
 
 // A linked task can leave the list (close week, delete, project deleted)
-// with a check-off the Hub hasn't had yet. Its done state then goes to the
-// outbox, and the next sync sends it; until then the task can't be
-// re-imported. "Hasn't had" = differs from what the Hub will hold: the
-// value in flight for it, else the last snapshot. A task that agrees leaves
-// nothing behind — so a reopen made in the Hub meanwhile is not undone.
-// HUB_SYNC's own removals (gone from the Hub) are not pending work, so it
-// skips this.
+// with a check-off the Hub hasn't confirmed. Its done state then goes to the
+// outbox, and syncs send it until one confirms it; until then the task can't
+// be re-imported. "Hasn't confirmed" = differs from the last snapshot (even
+// if it is in flight — that request may still fail), or differs from a value
+// in flight for it. A task that agrees with the Hub leaves nothing behind —
+// so a reopen made in the Hub meanwhile is not undone. HUB_SYNC's own
+// removals (gone from the Hub) are not pending work, so it skips this.
 function withHubOutbox(prev, next) {
   if (prev.projects === next.projects) return next;
   const still = new Set();
@@ -580,8 +580,9 @@ function withHubOutbox(prev, next) {
   prev.projects.forEach(p => p.tasks.forEach(t => {
     if (!t.hub || still.has(t.hub.id)) return;
     const done = t.status === "done";
-    const expected = hubInflight.has(t.hub.id) ? hubInflight.get(t.hub.id) : t.hub.done;
-    if (done !== expected) add.push({ id: t.hub.id, done });
+    const unconfirmed = done !== t.hub.done;
+    const overtaken = hubInflight.has(t.hub.id) && hubInflight.get(t.hub.id) !== done;
+    if (unconfirmed || overtaken) add.push({ id: t.hub.id, done });
   }));
   if (!add.length) return next;
   const ids = new Set(add.map(c => c.id));
