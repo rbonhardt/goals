@@ -587,11 +587,12 @@ function pinned(A, key, value) {
 }
 
 // A check-off belongs to the week it was made in. Played again after
-// another device closed that week, it would land on a habit or recurring
-// task already reset for the new week — so there it does nothing.
+// another device closed that week, it would land on a recurring task or
+// habit already reset for the new week — so there it does nothing. (A
+// one-off carries over as it was, so its check-off still counts.)
 function pastWeek(A, state, t) {
   const week = pinned(A, "week", () => state.week.startISO);
-  return week !== state.week.startISO && (t.type === "habit" || !!t.recurring);
+  return week !== state.week.startISO && !!t.recurring;
 }
 
 // Check-offs the Hub sync request in flight is carrying ({ id → done });
@@ -1457,7 +1458,7 @@ function createSync({ state, onChange, onPulled }) {
 
   // The server moved on: its copy, with the log run again on top.
   function rebase(newRev, data) {
-    const { _sync, ...rest } = data;
+    const { _sync, _cached, ...rest } = data;   // _cached: only ever a local note (see persist)
     marks = _sync && typeof _sync === "object" && !Array.isArray(_sync) ? _sync : {};
     log = log.filter(e => !(marks[e.c] && marks[e.c].s >= e.s));
     let next = migrate(rest);
