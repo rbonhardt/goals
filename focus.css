@@ -311,7 +311,24 @@ button { font-family: inherit; }
 .subs-toggle { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 11px; color: var(--ink-3); padding: 2px 0; }
 .subs-chev { transition: transform .2s; }
 .subs-chev.closed { transform: rotate(-90deg); }
-.subs-list { margin: 5px 0 2px; padding-left: 4px; border-left: 1.5px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.subs-list, .hub-list { margin: 5px 0 2px; padding-left: 4px; border-left: 1.5px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+/* Hub tasks grouped by Hub project (HubGroup in projectcard.jsx) */
+.hub-chev { width: 18px; height: 18px; flex: none; display: grid; place-items: center; background: none; border: none; padding: 0; margin-top: 1px; cursor: pointer; color: var(--ink-3); font-size: 13px; }
+.hub-chev:hover { color: var(--ink); }
+.hub-group-name { background: none; border: none; padding: 0; cursor: pointer; text-align: left; font-size: 14.5px; line-height: 1.3; color: var(--ink); }
+.hub-group-count { flex: none; font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-top: 3px; }
+.hub-sub { align-items: flex-start; }
+.hub-sub > .sub-grip, .hub-sub > .sub-box { margin-top: 2px; }
+.hub-sub-body { flex: 1; min-width: 0; }
+.hub-sub-line { display: flex; align-items: flex-start; gap: 6px; }
+.hub-sub-line .sub-text { min-width: 0; }
+.hub-sub-line .due-chip, .hub-sub-line .plan-chip { margin-top: 1px; }
+.hub-sub-today { flex: none; font-size: 11px; color: oklch(0.66 0.13 72); margin-top: 1px; }
+.hub-sub-tools { position: absolute; right: 0; top: -1px; display: flex; align-items: center; background: var(--paper-2); border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.hub-sub:hover .hub-sub-tools, .hub-sub-tools.on { opacity: 1; pointer-events: auto; }
+.hub-sub-tools .ttool { font-size: 12px; padding: 2px 5px; }
+.hub-group-menu { margin-left: auto; opacity: 0; transition: opacity .15s; }
+.task:hover .hub-group-menu, .hub-group-menu[data-popmenu] { opacity: 1; }
 .sub { display: flex; align-items: center; gap: 8px; padding-left: 2px; position: relative; border-radius: 5px; }
 .sub[draggable] { cursor: default; }
 .sub-grip { color: var(--line-2); font-size: 11px; cursor: grab; letter-spacing: -2px; opacity: 0; transition: opacity .15s; user-select: none; flex: none; width: 8px; }

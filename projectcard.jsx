@@ -266,6 +266,28 @@ function PlanEdit({ task, plan, onClose }) {
   );
 }
 
+// Due-date editor under a task. onClose(refocus): refocus=true hands focus
+// back to the chip (Enter/Escape).
+function DueEdit({ task, lane, onClose }) {
+  const { dispatch } = window.useFocusStore();
+  return (
+    <div className="due-edit" onClick={(e) => e.stopPropagation()}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) onClose(false); }}>
+      {/* Blur sits on the wrapper: clicking or tabbing anywhere outside
+          it closes the editor, while moving focus to the clear button
+          keeps it open — the chip is then the one way back in. The
+          clear button also eats mousedown for Safari, where buttons
+          don't take focus on click (relatedTarget would be null). */}
+      <input type="date" className="due-input" value={task.due || ""} aria-label="Due date" autoFocus
+        onChange={(e) => dispatch({ type: "SET_DUE", taskId: task.id, due: e.target.value })}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); onClose(true); } }} />
+      {lane === "queue" && <span className="due-hint">surfaces {window.DUE_LEAD_DAYS} days out</span>}
+      {task.due && <button onMouseDown={(e) => e.preventDefault()}
+        onClick={() => { dispatch({ type: "SET_DUE", taskId: task.id, due: null }); onClose(false); }}>clear</button>}
+    </div>
+  );
+}
+
 function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode }) {
   const { state, dispatch } = window.useFocusStore();
   const onToday = window.selTodayKeys(state).has(window.todayKey(task.id, null));
@@ -345,22 +367,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
 
           {showPlan && !isHabit && <PlanEdit task={task} plan={planDay} onClose={closePlan} />}
 
-          {showDue && (
-            <div className="due-edit" onClick={(e) => e.stopPropagation()}
-              onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowDue(false); }}>
-              {/* Blur sits on the wrapper: clicking or tabbing anywhere outside
-                  it closes the editor, while moving focus to the clear button
-                  keeps it open — the chip is then the one way back in. The
-                  clear button also eats mousedown for Safari, where buttons
-                  don't take focus on click (relatedTarget would be null). */}
-              <input type="date" className="due-input" value={task.due || ""} aria-label="Due date" autoFocus
-                onChange={(e) => dispatch({ type: "SET_DUE", taskId: task.id, due: e.target.value })}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); closeDueEditor(true); } }} />
-              {lane === "queue" && <span className="due-hint">surfaces {window.DUE_LEAD_DAYS} days out</span>}
-              {task.due && <button onMouseDown={(e) => e.preventDefault()}
-                onClick={() => { dispatch({ type: "SET_DUE", taskId: task.id, due: null }); closeDueEditor(false); }}>clear</button>}
-            </div>
-          )}
+          {showDue && <DueEdit task={task} lane={lane} onClose={closeDueEditor} />}
 
           {showNote || task.note ? (
             <window.InlineText value={task.note} onCommit={(t) => { dispatch({ type: "EDIT_TASK_NOTE", taskId: task.id, note: t }); if (!t) setShowNote(false); }}
@@ -414,8 +421,162 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
   );
 }
 
+// Hub tasks from one Hub project ("L10", "Events") share one row: the
+// project's name, with its tasks as steps under it. Ryan's call: a full row
+// each, notes and all, took too much room, and the Hub has the details (the
+// note still shows on hover). It is only how they look: each one is still its
+// own task, so check-off, Today, plan day, due date and the Hub link work as
+// before (see HubSubRow). A Hub task starred into the Big Three, made a habit
+// or given steps here keeps its own full row, so its badge, days or steps
+// stay in view.
+function hubGroupName(t) {
+  if (!t.hub || !("project" in t.hub) || t.big || t.type === "habit") return null;
+  if (Array.isArray(t.subtasks) && t.subtasks.length > 0) return null;
+  return t.hub.project || "Employee Hub";
+}
+
+// The lane's rows in order: a task, or a Hub group, shown where its first
+// task sits. `at` = that first task's index in `tasks`, which is where a drop
+// just above the row lands.
+function laneItems(tasks) {
+  const items = [], groups = new Map();
+  tasks.forEach((t, at) => {
+    const name = hubGroupName(t);
+    if (name == null) { items.push({ task: t, at }); return; }
+    if (groups.has(name)) { groups.get(name).tasks.push(t); return; }
+    const g = { group: name, tasks: [t], at };
+    groups.set(name, g);
+    items.push(g);
+  });
+  return items;
+}
+
+// One Hub task inside its group: a step-sized row with the task's own
+// controls — check-off, plan day, due date, Today, Big Three, lane, delete.
+function HubSubRow({ task, project, lane }) {
+  const { state, dispatch } = window.useFocusStore();
+  const onToday = window.selTodayKeys(state).has(window.todayKey(task.id, null));
+  const planDay = window.selPlanDay(state, task.id, null);
+  const isDone = task.status === "done";
+  const [showDue, setShowDue] = React.useState(false);
+  const [showPlan, setShowPlan] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const chipRef = React.useRef(null);
+  const planRef = React.useRef(null);
+  const closeMenu = React.useCallback(() => setMenuOpen(false), []);
+  const hoverMenu = useHoverMenu(setMenuOpen);
+  useClickOutside(menuOpen, hoverMenu, closeMenu);
+  useSoloMenu(menuOpen, closeMenu);
+  const refocus = (ref) => setTimeout(() => { if (ref.current) ref.current.focus(); }, 0);
+  const closeDue = (back) => { setShowDue(false); if (back) refocus(chipRef); };
+  const closePlan = (back) => { setShowPlan(false); if (back) refocus(planRef); };
+
+  function startDrag(e) {
+    window.SUBDRAG = null;
+    window.DRAGCARD = null;
+    window.TODAYDRAG = null;
+    window.DRAG = { taskId: task.id, fromProject: project.id, fromLane: lane };
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", task.id); } catch (x) {}
+  }
+
+  return (
+    <div className="sub hub-sub" title={task.note || undefined}
+      draggable onDragStart={startDrag}
+      onDragEnd={() => { window.DRAG = { taskId: null }; }}>
+      <span className="sub-grip" title="Drag to move">⋮⋮</span>
+      <button className={"sub-box" + (isDone ? " on" : "")} title={isDone ? "Done — click to reopen" : "Check off (here and in the Hub)"}
+        onClick={() => dispatch({ type: "SET_STATUS", taskId: task.id, status: isDone ? "todo" : "done" })} />
+      <div className="hub-sub-body">
+        <div className="hub-sub-line">
+          <window.InlineText value={task.text} onCommit={(x) => { if (x) dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: x }); }}
+            className={"sub-text" + (isDone ? " done" : "")} />
+          {planDay && !isDone && !showPlan && <PlanChip plan={planDay} chipRef={planRef} onEdit={() => setShowPlan(true)} />}
+          {task.due && !showDue && <DueChip task={task} chipRef={chipRef} onEdit={() => setShowDue(true)} />}
+          {onToday && <span className="hub-sub-today" title="On today's list">☀</span>}
+        </div>
+        {showPlan && <PlanEdit task={task} plan={planDay} onClose={closePlan} />}
+        {showDue && <DueEdit task={task} lane={lane} onClose={closeDue} />}
+      </div>
+      {/* the tools float over the row's end on hover, so the text gets the
+          whole width the rest of the time */}
+      <div className={"hub-sub-tools" + (menuOpen ? " on" : "")}>
+      <button className={"ttool ttool-sun" + (onToday ? " on" : " ttool-faint")}
+        title={onToday ? "On today's list — click to remove" : "Add to Today"}
+        onClick={(e) => { e.stopPropagation(); dispatch({ type: "TODAY_TOGGLE", taskId: task.id, subId: null }); }}>☀</button>
+      <div className="ttool-menu" data-popmenu={menuOpen ? "" : null} ref={hoverMenu}>
+        <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => CAN_HOVER || !o); }}>⋯</button>
+        {menuOpen && (
+          <div className="menu-pop open">
+            {!isDone && <button onClick={() => { setShowPlan(true); closeMenu(); }}>{planDay ? "Change plan day" : "Plan for a day"}</button>}
+            <button onClick={() => { setShowDue(true); closeMenu(); }}>{task.due ? "Change due date" : "Set due date"}</button>
+            <button onClick={() => { dispatch({ type: "PROMOTE_NEXT", taskId: task.id }); closeMenu(); }}>Promote to Big Three</button>
+            <button onClick={() => { dispatch({ type: "MOVE_TASK", taskId: task.id, toProject: project.id, toLane: lane === "active" ? "queue" : "active" }); closeMenu(); }}>
+              {lane === "active" ? "Send to queue" : "Move to active"}
+            </button>
+            <button className="danger" onClick={() => { dispatch({ type: "DELETE_TASK", taskId: task.id }); closeMenu(); }}>Delete</button>
+          </div>
+        )}
+      </div>
+      </div>
+    </div>
+  );
+}
+
+function HubGroup({ name, tasks, project, lane, dropMode }) {
+  const { dispatch } = window.useFocusStore();
+  // closed until opened, then remembered on this device (the pref is
+  // stored as "collapsed", so here true = open)
+  const [open, toggle] = window.useCollapsePref("focus.hubGroupOpen." + project.id + "." + name);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const closeMenu = React.useCallback(() => setMenuOpen(false), []);
+  const hoverMenu = useHoverMenu(setMenuOpen);
+  useClickOutside(menuOpen, hoverMenu, closeMenu);
+  useSoloMenu(menuOpen, closeMenu);
+  const done = tasks.filter(t => t.status === "done").length;
+  const count = done ? `${done}/${tasks.length} done` : `${tasks.length} to-do${tasks.length === 1 ? "" : "s"}`;
+
+  const toLane = lane === "active" ? "queue" : "active";
+  return (
+    <div className={"task hub-group lane-" + lane + (dropMode ? " drop-" + dropMode : "")} data-row data-group>
+      <div className="task-main">
+        <span className="task-grip" style={{ visibility: "hidden" }}>⋮⋮</span>
+        <button className="hub-chev" onClick={toggle} title={open ? "Hide these to-dos" : "Show these to-dos"}>
+          <span className={"subs-chev" + (open ? "" : " closed")}>⌄</span>
+        </button>
+        <div className="task-body">
+          <div className="task-textline">
+            <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="From the Employee Hub. Check one off here or there — the other side follows.">hub</span>
+            <button className="hub-group-name" onClick={toggle}>{name}</button>
+            <span className="hub-group-count">{count}</span>
+            <div className="ttool-menu hub-group-menu" data-popmenu={menuOpen ? "" : null} ref={hoverMenu}>
+              <button className="ttool ttool-faint" title="More" onClick={(e) => { e.stopPropagation(); setMenuOpen(o => CAN_HOVER || !o); }}>⋯</button>
+              {menuOpen && (
+                <div className="menu-pop open">
+                  <button onClick={() => { tasks.forEach(t => dispatch({ type: "MOVE_TASK", taskId: t.id, toProject: project.id, toLane })); closeMenu(); }}>
+                    {lane === "active" ? "Send all to queue" : "Move all to active"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          {open && (
+            <div className="hub-list">
+              {tasks.map(t => <HubSubRow key={t.id} task={t} project={project} lane={lane} />)}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emptyText }) {
   const { state, dispatch } = window.useFocusStore();
+  const items = laneItems(tasks);
+  // Where a drop just above row i lands in `tasks` (rows and tasks differ
+  // once Hub tasks are grouped); past the last row, the end.
+  const slot = (i) => i < items.length ? items[i].at : tasks.length;
   // drop : null | { type: "between", index } | { type: "into", taskId } | { type: "lane" }
   // - "between": insertion line between two rows; index = position to insert at
   // - "into":    drop highlights a target row; dragged becomes its subtask
@@ -450,20 +611,22 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emp
       if (e.clientY < r.top || e.clientY > r.bottom) continue;
       const rowTaskId = rows[i].dataset.taskId;
       const rel = (e.clientY - r.top) / r.height;
+      // A Hub group takes no steps: above or below it
+      if ("group" in rows[i].dataset) return { type: "between", index: slot(rel < 0.5 ? i : i + 1) };
       // Empty-lane placeholder rows don't have a taskId
-      if (!rowTaskId) return { type: "between", index: i };
-      if (rel < 0.3) return { type: "between", index: i };
-      if (rel > 0.7) return { type: "between", index: i + 1 };
+      if (!rowTaskId) return { type: "between", index: slot(i) };
+      if (rel < 0.3) return { type: "between", index: slot(i) };
+      if (rel > 0.7) return { type: "between", index: slot(i + 1) };
       const target = tasks.find(t => t.id === rowTaskId);
       // Its own parent can't take it back, and habits never show steps —
       // fall back to an insertion line rather than a dead zone.
       if (rowTaskId === d.taskId || !target || target.type === "habit")
-        return { type: "between", index: rel < 0.5 ? i : i + 1 };
+        return { type: "between", index: slot(rel < 0.5 ? i : i + 1) };
       return { type: "into", taskId: rowTaskId };
     }
     if (rows.length && e.clientY < rows[0].getBoundingClientRect().top)
-      return { type: "between", index: 0 };
-    return { type: "between", index: rows.length };
+      return { type: "between", index: slot(0) };
+    return { type: "between", index: slot(rows.length) };
   }
 
   function computeDrop(e) {
@@ -479,29 +642,28 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emp
       const rowTaskId = rows[i].dataset.taskId;
       const rel = (e.clientY - r.top) / r.height;
       // dragging a task onto itself disables nest-into, just bail (no preview)
-      if (rowTaskId === d.taskId) {
-        if (rel < 0.5) return { type: "between", index: i };
-        return { type: "between", index: i + 1 };
-      }
+      // — and a Hub group takes nothing in: above or below it
+      if (rowTaskId === d.taskId || "group" in rows[i].dataset)
+        return { type: "between", index: slot(rel < 0.5 ? i : i + 1) };
       // Empty lane placeholder rows don't have a taskId
-      if (!rowTaskId) return { type: "between", index: i };
+      if (!rowTaskId) return { type: "between", index: slot(i) };
       // Top 30% / bottom 30% drop between rows; middle 40% nests
-      if (rel < 0.3) return { type: "between", index: i };
-      if (rel > 0.7) return { type: "between", index: i + 1 };
+      if (rel < 0.3) return { type: "between", index: slot(i) };
+      if (rel > 0.7) return { type: "between", index: slot(i + 1) };
       // Tasks with their own subtasks can't be nested — fall back to an
       // insertion line so their steps never get silently dropped.
-      if (draggedHasSubtasks()) return { type: "between", index: rel < 0.5 ? i : i + 1 };
+      if (draggedHasSubtasks()) return { type: "between", index: slot(rel < 0.5 ? i : i + 1) };
       // Habits never show steps, so nesting into one would hide the task.
       const target = tasks.find(t => t.id === rowTaskId);
-      if (target && target.type === "habit") return { type: "between", index: rel < 0.5 ? i : i + 1 };
+      if (target && target.type === "habit") return { type: "between", index: slot(rel < 0.5 ? i : i + 1) };
       return { type: "into", taskId: rowTaskId };
     }
     // Above the first row (the lane's top padding, or the 3px the indicator
     // line is drawn above it) means "insert first", not "append last".
     if (rows.length && e.clientY < rows[0].getBoundingClientRect().top)
-      return { type: "between", index: 0 };
+      return { type: "between", index: slot(0) };
     // Below all rows
-    return { type: "between", index: rows.length };
+    return { type: "between", index: slot(rows.length) };
   }
 
   function onDragOver(e) {
@@ -560,10 +722,10 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emp
   // without recomputing positions itself.
   const dropForIndex = (i) => {
     if (!drop) return null;
-    if (drop.type === "into" && tasks[i] && drop.taskId === tasks[i].id) return "into";
+    if (drop.type === "into" && items[i].task && drop.taskId === items[i].task.id) return "into";
     if (drop.type === "between") {
-      if (drop.index === i) return "before";
-      if (drop.index === tasks.length && i === tasks.length - 1) return "after";
+      if (drop.index === items[i].at) return "before";
+      if (drop.index === tasks.length && i === items.length - 1) return "after";
     }
     return null;
   };
@@ -574,8 +736,10 @@ function Lane({ project, lane, tasks, children, openNoteForId, onNoteOpened, emp
       onDragOver={onDragOver}
       onDragLeave={(e) => { if (!ref.current.contains(e.relatedTarget)) setDrop(null); }}
       onDrop={onDrop}>
-      {tasks.map((t, i) => <TaskRow key={t.id} task={t} project={project} lane={lane}
-        openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} dropMode={dropForIndex(i)} />)}
+      {items.map((it, i) => it.group
+        ? <HubGroup key={"hub:" + it.group} name={it.group} tasks={it.tasks} project={project} lane={lane} dropMode={dropForIndex(i)} />
+        : <TaskRow key={it.task.id} task={it.task} project={project} lane={lane}
+          openNoteForId={openNoteForId} onNoteOpened={onNoteOpened} dropMode={dropForIndex(i)} />)}
       {tasks.length === 0 && <div className="lane-empty" data-row>{emptyText || (lane === "queue" ? "Queue is empty" : "Drop a task here")}</div>}
       {children}
     </div>

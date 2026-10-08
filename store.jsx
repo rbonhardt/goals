@@ -635,6 +635,11 @@ function setHubInflight(changes) { hubInflight = new Map((changes || []).map(c =
 // so a reopen made in the Hub meanwhile is not undone. HUB_SYNC's own
 // removals (gone from the Hub) are not pending work, so it skips this. What
 // was in flight is pinned to the action, so a replay decides the same way.
+// The Hub project a Hub task sits under ("L10", "Events"), or null.
+function hubProject(h) {
+  return typeof h.project === "string" && h.project.trim() ? h.project.trim() : null;
+}
+
 function withHubOutbox(prev, next, A) {
   if (prev.projects === next.projects) return next;
   let flying = null;
@@ -965,8 +970,9 @@ function applyAction(state, action) {
     // here — as { id, title, note, due, done, project, section }. A.gone: linked
     // ids the Hub no longer gives Ryan (deleted, or given to someone else).
     // A.sent: the [{ id, done }] this sync asked the Hub to apply.
-    // A linked task carries t.hub = { id, title, done, v: 2 } (plus a due of null):
-    // what the Hub said last time. A field that differs from that snapshot
+    // A linked task carries t.hub = { id, title, done, project, v: 2 } (plus a
+    // due of null): what the Hub said last time. `project` is the Hub project's
+    // name; the card groups Hub tasks by it (see HubGroup in projectcard.jsx). A field that differs from that snapshot
     // was changed on the side that differs, so each side's own edits survive:
     //  • done: differs from what was sent (or, if nothing was sent, from the
     //    snapshot) → changed here meanwhile: keep ours, it goes next sync;
@@ -1022,9 +1028,10 @@ function applyAction(state, action) {
           const next = { ...t, status, note,
             text: h.title !== t.hub.title ? h.title : t.text,
             ...(hubDue && t.due === hubDue ? { due: null, duePromoted: false } : {}),
-            hub: { id, title: h.title, due: null, done: !!h.done, v: 2 } };
+            hub: { id, title: h.title, due: null, done: !!h.done, project: hubProject(h), v: 2 } };
           const same = !old && next.status === t.status && next.text === t.text
-            && t.hub.title === next.hub.title && t.hub.done === next.hub.done;
+            && t.hub.title === next.hub.title && t.hub.done === next.hub.done
+            && t.hub.project === next.hub.project;
           if (same) return [t];
           touched = true;
           return [next];
@@ -1054,7 +1061,7 @@ function applyAction(state, action) {
           taken.add(id);
           return { id, text: h.title, status: "todo", note, big: null, lane: "queue", subtasks: [], type: "todo",
             days: reset7, target: 5, recurring: false, due: null, duePromoted: false,
-            hub: { id: h.id, title: h.title, due: null, done: false, v: 2 } };
+            hub: { id: h.id, title: h.title, due: null, done: false, project: hubProject(h), v: 2 } };
         });
         const target = resolveProject(state, "motion");
         projects = target

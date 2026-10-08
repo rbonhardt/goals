@@ -687,6 +687,20 @@ test("tasks linked before the change lose the Hub's due date and the 'From the H
   assert.equal(srv.rev, revBefore + 1, "an unchanged sync saves nothing");
 });
 
+test("a Hub task keeps its Hub project's name (the card groups by it)", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("p1", "One", { project: "L10" }), hubTask("p2", "Two", { project: "" })], gone: [], sent: [] });
+  const one = () => tasks(A.state()).find(t => t.hub && t.hub.id === "p1");
+  assert.equal(one().hub.project, "L10");
+  assert.equal(tasks(A.state()).find(t => t.hub && t.hub.id === "p2").hub.project, null, "no project: null");
+  // a task linked before this change (no project in its snapshot) gets one
+  // on the next sync, and a project moved in the Hub follows
+  A.dispatch({ type: "HUB_SYNC", at: 200, tasks: [hubTask("p1", "One", { project: "Events" })], gone: [], sent: [] });
+  assert.equal(one().hub.project, "Events");
+  await A.flush();
+  assert.equal(tasks(srv.read()).find(t => t.hub && t.hub.id === "p1").hub.project, "Events");
+});
+
 test("nothing is saved before the first pull works", async () => {
   const srv = makeServer();
   const A = makeDevice("A", srv);
