@@ -1612,11 +1612,6 @@ function createSync({ state, onChange, onPulled }) {
           rebase(row.rev, row.data);   // always, on the first pull (rev is null then)
         }
         pulled = true;
-        if (carryOutbox.length) {
-          const entries = carryOutbox;
-          carryOutbox = [];
-          dispatch({ type: "HUB_OUTBOX_KEEP", entries });
-        }
       } finally {
         if (my === epoch) onPulled();
       }
@@ -1643,6 +1638,14 @@ function createSync({ state, onChange, onPulled }) {
     const kept = adopt();
     kept.forEach(e => { if (e.t > lastT) lastT = e.t; });   // ours come after theirs, even if the clock went back
     log = [...kept, ...log];
+    if (carryOutbox.length) {
+      // logged now (cur holds it already), so it outlives an offline reload
+      // and runs on top of the first server copy
+      lastT = Math.max(Date.now(), lastT + 1);
+      log.push({ c: page, s: ++seq, t: lastT, a: { type: "HUB_OUTBOX_KEEP", entries: carryOutbox } });
+      curHas[page] = seq;
+      carryOutbox = [];
+    }
     persist();
     pull();
     return stop;

@@ -624,7 +624,10 @@ test("a Hub check-off cached by the code before this one reaches the server", as
   const old = srv.read(); delete old._sync;
   old.hubOutbox = [{ id: "h9", done: true }];          // the live code's cache: no _cached note
   storage.setItem("focus.store.v1", JSON.stringify(old));
-  const A = makeDevice("A", srv, storage);
+  const A0 = makeDevice("A0", srv, storage);
+  A0.net.offline = true; A0.start(); await A0.flush();   // first load of the new code is offline…
+  A0.persist();
+  const A = makeDevice("A", srv, makeStorage(A0.storage));   // …then a reload, online
   A.start(); await A.flush();
   assert.equal(JSON.stringify(srv.read().hubOutbox), JSON.stringify([{ id: "h9", done: true }]));
   const B = makeDevice("B", srv, makeStorage(A.storage));   // a cache from the new code: no carry-over
