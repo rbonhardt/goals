@@ -449,6 +449,134 @@ test("an add played twice (its _sync note gone) still makes one copy", async () 
   assert.equal(s.scheduled.filter(x => x.text === "sched once").length, 1);
 });
 
+test("a goal typed into a blank line that already saved survives a merge", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "GOAL_INSERT", scope: "quarter", id: "g-new", parentId: null, index: 0 });
+  await A.flush();   // the blank line is on the server now
+  B.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(B.state(), "Reply to Diego").id, note: "B" });
+  await B.flush();
+  A.dispatch({ type: "GOAL_EDIT", scope: "quarter", id: "g-new", text: "typed on A" });
+  await A.flush();
+  assert.ok(srv.read().quarter.goals.some(g => g.id === "g-new" && g.text === "typed on A"));
+});
+
+test("an offline page that took up a log, then reloaded, still sends it", async () => {
+  const srv = makeServer();   // no server row yet
+  const shared = makeStorage();
+  const T = makeDevice("T", srv, shared);
+  const X = makeDevice("X", srv, shared);
+  X.net.offline = true; X.start(); await X.flush();
+  X.dispatch({ type: "ADD_TASK", projectId: "self", id: "fromX", text: "from tab X" });
+  X.persist();
+  T.persist();   // the cache, written last, lacks X's task
+  const N = makeDevice("N", srv, makeStorage(shared));
+  N.net.offline = true; N.start(); await N.flush();
+  N.persist();
+  const N2 = makeDevice("N2", srv, makeStorage(N.storage));
+  N2.start(); await N2.flush();
+  assert.ok(taskById(srv.read(), "fromX"));
+});
+
+test("a step edited on A while B moved it to another task keeps A's edit", async () => {
+  const { srv, A, B } = await twoDevices();
+  const x = taskByText(A.state(), "Reply to Diego"), y = taskByText(A.state(), "Q3 roadmap draft");
+  A.dispatch({ type: "ADD_SUB", taskId: x.id, text: "draft" });
+  A.dispatch({ type: "ADD_SUB", taskId: x.id, text: "send" });
+  await A.flush(); await B.pull();
+  const [s1, s2] = taskById(A.state(), x.id).subtasks;
+  A.dispatch({ type: "EDIT_SUB", taskId: x.id, subId: s1.id, text: "draft v2" });
+  A.dispatch({ type: "TOGGLE_SUB", taskId: x.id, subId: s2.id });
+  B.dispatch({ type: "MOVE_SUB_TO_TASK", fromTaskId: x.id, toTaskId: y.id, subId: s1.id, toIndex: null });
+  B.dispatch({ type: "MOVE_SUB_TO_TASK", fromTaskId: x.id, toTaskId: y.id, subId: s2.id, toIndex: null });
+  await B.flush(); await A.flush();
+  const subs = taskById(srv.read(), y.id).subtasks;
+  assert.equal(subs.find(z => z.id === s1.id).text, "draft v2");
+  assert.equal(subs.find(z => z.id === s2.id).done, true);
+});
+
+test("a task A edits while B nests it into another task keeps A's edit", async () => {
+  const { srv, A, B } = await twoDevices();
+  const x = taskByText(A.state(), "Harada method — pg 26"), into = taskByText(A.state(), "Reply to Diego");
+  A.dispatch({ type: "EDIT_TASK_TEXT", taskId: x.id, text: "Harada — pg 40" });
+  A.dispatch({ type: "SET_STATUS", taskId: x.id, status: "done" });
+  B.dispatch({ type: "NEST_TASK", taskId: x.id, intoTaskId: into.id });
+  await B.flush(); await A.flush();
+  const step = taskById(srv.read(), into.id).subtasks.find(z => z.id === x.id);
+  assert.equal(step.text, "Harada — pg 40");
+  assert.equal(step.done, true);
+  assert.equal(taskById(srv.read(), x.id), undefined);
+});
+
+test("a step A checks while B makes it a task keeps the check", async () => {
+  const { srv, A, B } = await twoDevices();
+  const x = taskByText(A.state(), "Reply to Diego");
+  A.dispatch({ type: "ADD_SUB", taskId: x.id, text: "call back" });
+  await A.flush(); await B.pull();
+  const sub = taskById(A.state(), x.id).subtasks[0];
+  A.dispatch({ type: "TOGGLE_SUB", taskId: x.id, subId: sub.id });
+  A.dispatch({ type: "EDIT_SUB", taskId: x.id, subId: sub.id, text: "call back today" });
+  B.dispatch({ type: "PROMOTE_SUB_TO_TASK", fromTaskId: x.id, subId: sub.id, toProject: "self", toLane: "active", toIndex: null });
+  await B.flush(); await A.flush();
+  const t = taskById(srv.read(), sub.id);
+  assert.ok(t, "the step became a task with the same id");
+  assert.equal(t.status, "done");
+  assert.equal(t.text, "call back today");
+});
+
+test("a goal edit made while B closed the quarter lands in the archive", async () => {
+  const { srv, A, B } = await twoDevices();
+  const g = A.state().quarter.goals[1];
+  A.dispatch({ type: "GOAL_EDIT", scope: "quarter", id: g.id, text: "edited on A" });
+  A.dispatch({ type: "GOAL_TOGGLE", scope: "quarter", id: g.id });
+  const q = B.state().quarter;
+  B.dispatch({ type: "ROLL_QUARTER", hits: {}, next: { label: "Q9", range: "", goals: [] },
+    archive: { label: q.label, range: q.range, goals: [], journal: "", closedAt: 1 } });
+  await B.flush(); await A.flush();
+  const arch = srv.read().quarterHistory[0];
+  const got = arch.goals.find(x => x.id === g.id);
+  assert.equal(got.text, "edited on A");
+  assert.equal(got.done, true);
+  assert.equal(srv.read().quarter.goals.length, 0, "nothing leaked into the new quarter");
+});
+
+test("a Hub correction queued during a request is kept through a merge", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h5", "Five")], gone: [], sent: [] });
+  await A.flush(); await B.pull();
+  const id = tasks(A.state()).find(t => t.hub && t.hub.id === "h5").id;
+  A.dispatch({ type: "SET_STATUS", taskId: id, status: "done" });
+  A.ctx.setHubInflight([{ id: "h5", done: true }]);   // that check-off is on its way to the Hub
+  A.dispatch({ type: "SET_STATUS", taskId: id, status: "todo" });
+  A.dispatch({ type: "DELETE_TASK", taskId: id });
+  A.ctx.setHubInflight([]);
+  A.dispatch({ type: "HUB_SYNC", at: 200, tasks: [hubTask("h5", "Five", { done: true })], gone: [], sent: [{ id: "h5", done: true }] });
+  const want = JSON.stringify(A.state().hubOutbox);
+  assert.equal(want, JSON.stringify([{ id: "h5", done: false }]));
+  B.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(B.state(), "Reply to Diego").id, note: "B" });
+  await B.flush(); await A.flush();
+  assert.equal(JSON.stringify(srv.read().hubOutbox), want);
+});
+
+test("an old scheduled check-off doesn't undo the new period's", async () => {
+  const { srv, A, B } = await twoDevices();
+  const it = A.state().scheduled[0];
+  A.dispatch({ type: "TOGGLE_SCHEDULED", id: it.id, periodKey: "2026-10-05", todayISO: "2026-10-11" });
+  B.dispatch({ type: "TOGGLE_SCHEDULED", id: it.id, periodKey: "2026-10-12", todayISO: "2026-10-12" });
+  await B.flush(); await A.flush();
+  assert.equal(srv.read().scheduled[0].doneFor, "2026-10-12");
+});
+
+test("a Hub answer that arrives late doesn't undo a newer one", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h6", "Six")], gone: [], sent: [] });
+  await A.flush(); await B.pull();
+  B.dispatch({ type: "HUB_SYNC", at: 2000, tasks: [hubTask("h6", "Six (new title)")], gone: [], sent: [] });
+  await B.flush();
+  A.dispatch({ type: "HUB_SYNC", at: 1000, tasks: [hubTask("h6", "Six (old title)")], gone: [], sent: [] });   // asked earlier, answered later
+  await A.flush();
+  assert.equal(tasks(srv.read()).find(t => t.hub && t.hub.id === "h6").text, "Six (new title)");
+});
+
 test("nothing is saved before the first pull works", async () => {
   const srv = makeServer();
   const A = makeDevice("A", srv);

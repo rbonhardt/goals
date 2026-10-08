@@ -23,7 +23,7 @@ function QuarterReview({ onClose }) {
   function finish() {
     const archive = {
       label: q.label, range: q.range,
-      goals: q.goals.map((g) => ({ text: g.text, done: hits[g.id] === true, subs: g.subs.map((s) => ({ text: s.text, done: s.done })) })),
+      goals: q.goals.map((g) => ({ id: g.id, text: g.text, done: hits[g.id] === true, subs: g.subs.map((s) => ({ id: s.id, text: s.text, done: s.done })) })),
       journal: reflection.trim(),
       closedAt: Date.now()
     };

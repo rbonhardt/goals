@@ -194,9 +194,12 @@ function load() {
   return migrate(seed());
 }
 
-// backfill fields added in later versions so older saved state never crashes
-function migrate(s) {
+// backfill fields added in later versions so older saved state never crashes.
+// keepBlank: leave blank goals in (a server copy under a replay: the blank
+// line may be one being typed — see createSync's rebase)
+function migrate(s, { keepBlank = false } = {}) {
   if (!s || !s.projects) return seed();
+  const tidy = keepBlank ? (goals) => goals : tidyGoals;
   if (!s.quarterHistory) s.quarterHistory = [];
   // scheduled strip added later: seed the defaults only when the field has
   // never existed (an emptied list stays empty)
@@ -206,9 +209,9 @@ function migrate(s) {
   // Goals tile added later: quarter goals were plain strings (see normGoal);
   // the month list is new
   if (!s.quarter) s.quarter = { label: "Q?", range: "", goals: [] };
-  s.quarter.goals = tidyGoals((Array.isArray(s.quarter.goals) ? s.quarter.goals : []).map(normGoal));
+  s.quarter.goals = tidy((Array.isArray(s.quarter.goals) ? s.quarter.goals : []).map(normGoal));
   if (!s.month || !Array.isArray(s.month.goals)) s.month = { key: monthKey(), goals: [] };
-  s.month.goals = tidyGoals(s.month.goals.map(normGoal));
+  s.month.goals = tidy(s.month.goals.map(normGoal));
   if (!Array.isArray(s.monthHistory)) s.monthHistory = [];
   // Employee Hub link added later: Hub task ids deleted here on purpose, so
   // the next sync doesn't bring them back (see HUB_SYNC)
@@ -560,7 +563,28 @@ function reducer(state, action) {
   const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
   const next = sinkDone(applyAction(base, action));
   if (action.type === "HYDRATE") return rollDay(next);
-  return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next);
+  return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next, action);
+}
+
+// A step action names the step's parent task. If the step has moved to
+// another task since (on another device — see createSync), it goes to where
+// the step is now.
+const STEP_PARENT = { TOGGLE_SUB: "taskId", EDIT_SUB: "taskId", DEL_SUB: "taskId", MOVE_SUB: "taskId",
+  TODAY_ADD: "taskId", TODAY_REMOVE: "taskId", TODAY_TOGGLE: "taskId", PLAN_ADD: "taskId", PLAN_REMOVE: "taskId",
+  MOVE_SUB_TO_TASK: "fromTaskId", PROMOTE_SUB_TO_TASK: "fromTaskId" };
+function rehome(state, A) {
+  const key = STEP_PARENT[A.type];
+  if (!key || !A.subId) return A;
+  const { task } = findTask(state, A[key]);
+  if (task && (task.subtasks || []).some(x => x.id === A.subId)) return A;
+  const owner = findStep(state, A.subId);
+  return owner ? { ...A, [key]: owner.task.id } : A;
+}
+function findStep(state, subId) {
+  for (const p of state.projects)
+    for (const t of p.tasks)
+      if ((t.subtasks || []).some(x => x.id === subId)) return { project: p, task: t };
+  return null;
 }
 
 // Run one action the way the store does: through the reducer, with uid()
@@ -569,12 +593,13 @@ function reducer(state, action) {
 // newer copy from the server, and must do the same thing there.
 function runAction(state, A) {
   const ids = A.__ids || (A.__ids = []);
+  if (!A.__pin) A.__pin = {};   // shared with rehome's copy
   let i = 0;
   uidTape = () => {
     if (i === ids.length) ids.push(randomId());
     return ids[i++];
   };
-  try { return reducer(state, A); } finally { uidTape = null; }
+  try { return reducer(state, rehome(state, A)); } finally { uidTape = null; }
 }
 
 // A choice an action makes from the state it lands on — "check it", not
@@ -608,9 +633,12 @@ function setHubInflight(changes) { hubInflight = new Map((changes || []).map(c =
 // if it is in flight — that request may still fail), or differs from a value
 // in flight for it. A task that agrees with the Hub leaves nothing behind —
 // so a reopen made in the Hub meanwhile is not undone. HUB_SYNC's own
-// removals (gone from the Hub) are not pending work, so it skips this.
-function withHubOutbox(prev, next) {
+// removals (gone from the Hub) are not pending work, so it skips this. What
+// was in flight is pinned to the action, so a replay decides the same way.
+function withHubOutbox(prev, next, A) {
   if (prev.projects === next.projects) return next;
+  let flying = null;
+  const inflight = () => flying || (flying = new Map(A ? pinned(A, "hubFlying", () => [...hubInflight]) : hubInflight));
   const still = new Set();
   next.projects.forEach(p => p.tasks.forEach(t => { if (t.hub) still.add(t.hub.id); }));
   const add = [];
@@ -618,7 +646,7 @@ function withHubOutbox(prev, next) {
     if (!t.hub || still.has(t.hub.id)) return;
     const done = t.status === "done";
     const unconfirmed = done !== t.hub.done;
-    const overtaken = hubInflight.has(t.hub.id) && hubInflight.get(t.hub.id) !== done;
+    const overtaken = inflight().has(t.hub.id) && inflight().get(t.hub.id) !== done;
     if (unconfirmed || overtaken) add.push({ id: t.hub.id, done });
   }));
   if (!add.length) return next;
@@ -730,6 +758,8 @@ function applyAction(state, action) {
     // ---- tasks ----
     case "CYCLE_STATUS": {
       const next = { todo: "doing", doing: "done", done: "todo" };
+      if (!findTask(state, A.taskId).task && findStep(state, A.taskId))
+        return mapStep(state, A.taskId, (x) => ({ ...x, done: pinned(A, "status", () => x.done ? "todo" : "done") === "done" }));
       return mapTask(state, A.taskId, (t) => pastWeek(A, state, t) ? t : { ...t, status: pinned(A, "status", () => next[t.status]) });
     }
     case "TOGGLE_HABIT_DAY":
@@ -759,8 +789,12 @@ function applyAction(state, action) {
     case "TOGGLE_RECURRING":
       return mapTask(state, A.taskId, (t) => ({ ...t, recurring: pinned(A, "on", () => !t.recurring) }));
     case "SET_STATUS":
+      if (!findTask(state, A.taskId).task && findStep(state, A.taskId))
+        return mapStep(state, A.taskId, (x) => ({ ...x, done: A.status === "done" }));
       return mapTask(state, A.taskId, (t) => pastWeek(A, state, t) ? t : { ...t, status: A.status });
     case "EDIT_TASK_TEXT":
+      if (!findTask(state, A.taskId).task && findStep(state, A.taskId))   // nested into a step meanwhile
+        return mapStep(state, A.taskId, (x) => ({ ...x, text: A.text }));
       return mapTask(state, A.taskId, (t) => ({ ...t, text: A.text }));
     case "EDIT_TASK_NOTE":
       return mapTask(state, A.taskId, (t) => ({ ...t, note: A.note }));
@@ -1052,8 +1086,12 @@ function applyAction(state, action) {
         : { ...t, subtasks: [...t.subtasks, { id, text: A.text, done: false }] });
     }
     case "TOGGLE_SUB":
+      if (!findStep(state, A.subId) && findTask(state, A.subId).task)   // made a task meanwhile
+        return mapTask(state, A.subId, (t) => ({ ...t, status: pinned(A, "done", () => t.status !== "done") ? "done" : "todo" }));
       return mapTask(state, A.taskId, (t) => pastWeek(A, state, t) ? t : { ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, done: pinned(A, "done", () => !s.done) } : s) });
     case "EDIT_SUB":
+      if (!findStep(state, A.subId) && findTask(state, A.subId).task)
+        return mapTask(state, A.subId, (t) => ({ ...t, text: A.text }));
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, text: A.text } : s) }));
     case "DEL_SUB":
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.filter(s => s.id !== A.subId) }));
@@ -1080,7 +1118,9 @@ function applyAction(state, action) {
       const { task: into } = findTask(state, A.intoTaskId);
       if (!task || !into || task.id === into.id || into.type === "habit"
           || (Array.isArray(task.subtasks) && task.subtasks.length > 0)) return state;
-      const sub = { id: uid(), text: task.text, done: task.status === "done" };
+      // the step keeps the task's id, so an edit made to the task elsewhere
+      // meanwhile still finds it (see EDIT_TASK_TEXT / SET_STATUS)
+      const sub = { id: task.id, text: task.text, done: task.status === "done" };
       let s = mapTask(state, into.id, (t) => ({ ...t, subtasks: [...t.subtasks, sub] }));
       s = retargetItem(s, task.id, null, into.id, sub.id);
       return { ...s, projects: s.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== task.id) })) };
@@ -1117,7 +1157,9 @@ function applyAction(state, action) {
       // bail before removal if there is nowhere to land — otherwise the step
       // would vanish
       if (!sub || !state.projects.some(p => p.id === A.toProject)) return state;
-      const t = { id: uid(), text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false };
+      // the task keeps the step's id (unless taken), so an edit made to the
+      // step elsewhere meanwhile still finds it (see EDIT_SUB / TOGGLE_SUB)
+      const t = { id: findTask(state, sub.id).task ? uid() : sub.id, text: sub.text, status: sub.done ? "done" : "todo", note: "", big: null, lane: A.toLane, subtasks: [], type: "todo", days: [false,false,false,false,false,false,false], target: 5, recurring: false, due: null, duePromoted: false };
       // a step on the Today list (or a day ahead) stays on it as the task it became
       const s = retargetItem(mapTask(state, A.fromTaskId, (x) => ({ ...x, subtasks: x.subtasks.filter(y => y.id !== A.subId) })), A.fromTaskId, A.subId, t.id, null);
       return { ...s, projects: s.projects.map(p => {
@@ -1171,7 +1213,10 @@ function applyAction(state, action) {
       // done-state is per period: A.periodKey is the week startISO (weekly)
       // or "YYYY-MM" (monthly); a stale doneFor simply stops matching
       return { ...state, scheduled: state.scheduled.map(it => it.id !== A.id ? it
-        : pinned(A, "off", () => it.doneFor === A.periodKey) ? { ...it, doneFor: null, doneAt: null }
+        // pinned: on or off as clicked; played again later, it leaves a
+        // different period's check-off alone (periods sort as strings)
+        : pinned(A, "off", () => it.doneFor === A.periodKey) ? (it.doneFor === A.periodKey ? { ...it, doneFor: null, doneAt: null } : it)
+        : it.doneFor && it.doneFor > A.periodKey ? it
         : { ...it, doneFor: A.periodKey, doneAt: A.todayISO }) };
     case "EDIT_SCHEDULED_TEXT":
       return { ...state, scheduled: state.scheduled.map(it => it.id === A.id ? { ...it, text: A.text } : it) };
@@ -1241,7 +1286,7 @@ function applyAction(state, action) {
       return {
         ...state,
         quarterHistory: [A.hits ? { ...A.archive, label: state.quarter.label, range: state.quarter.range,
-          goals: state.quarter.goals.map(g => ({ text: g.text, done: A.hits[g.id] === true, subs: g.subs.map(x => ({ text: x.text, done: x.done })) })) }
+          goals: state.quarter.goals.map(g => ({ id: g.id, text: g.text, done: A.hits[g.id] === true, subs: g.subs.map(x => ({ id: x.id, text: x.text, done: x.done })) })) }
           : A.archive, ...(state.quarterHistory || [])],
         quarter: { ...A.next, goals: (A.next.goals || []).map(normGoal) },
       };
@@ -1298,14 +1343,28 @@ function retargetItem(state, taskId, subId, toTaskId, toSubId) {
   return s;
 }
 function mapClearBig(state, taskId) { return mapTask(state, taskId, t => t); }
+// the state with the one step with this id transformed, wherever it is
+function mapStep(state, subId, fn) {
+  const owner = findStep(state, subId);
+  return owner ? mapTask(state, owner.task.id, (t) => ({ ...t, subtasks: t.subtasks.map(x => x.id === subId ? fn(x) : x) })) : state;
+}
 // The goal list a GOAL_* action lands on: { list, put(newList) -> state },
 // or null for an unknown scope. A month action made on a list that has since
 // rolled over (a tab left open past the 1st, the roll running just before
 // the action) lands in that month's archive, so the click isn't lost. With
 // no archive (that month had no goals) it lands on the current month.
+// A quarter action is pinned to the quarter it was made in: if that quarter
+// was closed since (on another device — see createSync), it lands in the
+// quarter's archive, which keeps goal ids.
 function goalTarget(state, A) {
-  if (A.scope === "quarter")
-    return { list: state.quarter.goals, put: (goals) => ({ ...state, quarter: { ...state.quarter, goals } }) };
+  if (A.scope === "quarter") {
+    const q = state.quarter, here = q.label + "|" + q.range;
+    const mine = pinned(A, "quarter", () => here);
+    const hist = state.quarterHistory || [];
+    const i = mine !== here ? hist.findIndex(h => h && h.label + "|" + h.range === mine && Array.isArray(h.goals) && h.goals.every(g => g && g.id && Array.isArray(g.subs))) : -1;
+    if (i >= 0) return { list: hist[i].goals, put: (goals) => ({ ...state, quarterHistory: hist.map((h, j) => j === i ? { ...h, goals } : h) }) };
+    return { list: q.goals, put: (goals) => ({ ...state, quarter: { ...q, goals } }) };
+  }
   if (A.scope !== "month") return null;
   const hist = state.monthHistory || [];
   const i = A.key && A.key !== state.month.key ? hist.findIndex(h => h.key === A.key) : -1;
@@ -1369,13 +1428,13 @@ function resolveProject(state, ref) {
 //    or in a tab closed before they were saved, go up after the next load.
 // Nothing is sent before a pull has worked: until then this copy may be
 // missing what other devices did.
-const SYNC_MARK_DAYS = 30;   // a page's _sync note goes this long after its last save
+const SYNC_MARK_DAYS = 90;   // a page's _sync note goes this long after its last save
 
 function createSync({ state, onChange, onPulled }) {
   const page = randomId() + randomId();   // this page load; its log entries carry it
   const pageKey = SYNC_KEY + "." + page;
   let cur = state;          // the state on screen
-  const cached = cacheNotes.get(state) || {};   // log entries the loaded copy already holds
+  let curHas = { ...(cacheNotes.get(state) || {}) };   // per page, the last log entry `cur` holds
   let user = null, api = null;
   let rev = null;           // the server rev the log is played on top of
   let marks = {};           // the server copy's _sync, as of the last pull or save
@@ -1400,13 +1459,13 @@ function createSync({ state, onChange, onPulled }) {
     if (next === cur) return;   // changed nothing: nothing to save or run again
     lastT = Math.max(Date.now(), lastT + 1);
     log.push({ c: page, s: ++seq, t: lastT, a });
+    curHas[page] = seq;
     show(next);
     clearTimeout(timer);
     timer = setTimeout(flush, 800);
   }
 
-  // Per page, the last log entry in `log` — what `cur` holds beyond the
-  // server's copy.
+  // Per page, the last entry in `entries`.
   function lastOf(entries) {
     const out = {};
     entries.forEach(e => { if (!(out[e.c] >= e.s)) out[e.c] = e.s; });
@@ -1416,7 +1475,7 @@ function createSync({ state, onChange, onPulled }) {
   // The screen copy (instant paint, offline), noting which log entries it
   // holds, and this page's log.
   function persist() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...cur, _cached: lastOf(log) })); } catch (e) {}
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...cur, _cached: curHas })); } catch (e) {}
     if (!user) return;
     try {
       if (log.length) localStorage.setItem(pageKey, JSON.stringify({ user, log }));
@@ -1461,13 +1520,14 @@ function createSync({ state, onChange, onPulled }) {
     const { _sync, _cached, ...rest } = data;   // _cached: only ever a local note (see persist)
     marks = _sync && typeof _sync === "object" && !Array.isArray(_sync) ? _sync : {};
     log = log.filter(e => !(marks[e.c] && marks[e.c].s >= e.s));
-    let next = migrate(rest);
+    let next = migrate(rest, { keepBlank: true });
     log = log.filter(e => {
       // one bad entry must not stop every save after it
       try { next = runAction(next, e.a); return true; }
       catch (err) { console.warn("[sync] dropped an action that no longer applies:", e.a.type, (err && err.message) || err); return false; }
     });
     rev = newRev;
+    curHas = lastOf(log);   // cur = the server's copy + the whole log
     seedIt = false;   // the server has a copy after all
     show(next);
     persist();
@@ -1520,10 +1580,11 @@ function createSync({ state, onChange, onPulled }) {
           if (!pulled) {
             let next = cur;
             log = log.filter(e => {
-              if (e.c === page || cached[e.c] >= e.s) return true;
+              if (curHas[e.c] >= e.s) return true;
               try { next = runAction(next, e.a); return true; }
               catch (err) { console.warn("[sync] dropped an action that no longer applies:", e.a.type, (err && err.message) || err); return false; }
             });
+            curHas = lastOf(log);
             show(next);
           }
         } else if (row.rev !== rev) {

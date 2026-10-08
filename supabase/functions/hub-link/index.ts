@@ -7,7 +7,9 @@
 // focus_link_sync() RPC with a shared secret. The Hub applies the
 // check-offs to Ryan's tasks only and returns his task list:
 //   { "applied": n, "tasks": [{ id, title, note, due, done, project, section }], "gone": [ids] }
-// which goes straight back to the page.
+// which goes back to the page with "at" added: this server's clock when the
+// Hub answered. One clock for every device, so the page can tell an older
+// answer from a newer one (see HUB_SYNC in store.jsx).
 //
 // Secrets (`supabase secrets set --project-ref vaxltvzsqbedvjtoljnz …`):
 //   HUB_URL          https://dtzbhofbmfujlyqxbeku.supabase.co
@@ -92,5 +94,7 @@ Deno.serve(async (req) => {
     console.error("[hub-link] hub said", res.status, text.slice(0, 500));
     return json({ error: "the Hub did not answer", status: res.status }, 502);
   }
-  return new Response(text, { headers: { ...cors, "content-type": "application/json" } });
+  let out: Record<string, unknown>;
+  try { out = JSON.parse(text); } catch { return json({ error: "the Hub sent something odd" }, 502); }
+  return json({ ...out, at: Date.now() });
 });

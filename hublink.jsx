@@ -48,6 +48,7 @@ function useHubLink() {
     try {
       const s = stateRef.current;
       const changes = hubPendingChanges(s);
+      const asked = Date.now();
       window.setHubInflight(changes);
       const { data, error } = await window.supaClient.functions.invoke("hub-link", {
         body: { changes, known: hubKnownIds(s) },
@@ -56,7 +57,10 @@ function useHubLink() {
       if (data && Array.isArray(data.tasks)) {
         // `sent` tells the merge exactly what the Hub was asked to do, so a
         // check made while this was in flight isn't mistaken for the Hub's.
-        dispatch({ type: "HUB_SYNC", tasks: data.tasks, gone: Array.isArray(data.gone) ? data.gone : [], sent: changes });
+        // `at` = when the Hub answered, by the server's clock (the request's
+        // start if the function is older): how HUB_SYNC tells old news from new
+        dispatch({ type: "HUB_SYNC", tasks: data.tasks, gone: Array.isArray(data.gone) ? data.gone : [], sent: changes,
+          at: typeof data.at === "number" ? data.at : asked });
       }
     } catch (e) {
       // Offline or the link is down: the changes stay pending and go next time.
