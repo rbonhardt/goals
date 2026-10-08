@@ -8,8 +8,15 @@
 -- function hands back the newer copy; the app puts its own unsaved actions
 -- on top of it and saves again (see the sync section of store.jsx).
 --
--- Safe to apply before the new app code ships: today's app upserts the row
--- directly; the trigger just counts those writes too.
+-- Once the new app has saved (its copies carry a "_sync" key), a plain
+-- write — a tab still running the old code, which never checks rev — is
+-- refused, so it can't overwrite saves it never saw. Reloading the tab
+-- gets the new code. (A hand edit in SQL must first run
+--   select set_config('focus.app_state_save', 'on', true);
+-- in the same transaction.)
+--
+-- Safe to apply before the new app code ships: until the new app's first
+-- save, plain upserts work as today; the trigger just counts them.
 -- ============================================================
 
 alter table public.app_state add column if not exists rev bigint not null default 0;
@@ -23,6 +30,10 @@ begin
   if tg_op = 'INSERT' then
     new.rev := 1;
   else
+    if old.data ? '_sync'
+       and coalesce(current_setting('focus.app_state_save', true), '') <> 'on' then
+      raise exception 'Focus: this tab runs old code; reload it to save';
+    end if;
     new.rev := old.rev + 1;
   end if;
   return new;
@@ -55,6 +66,8 @@ begin
   if p_data is null then
     raise exception 'no data' using errcode = '22004';
   end if;
+  -- lets this transaction's write past app_state_bump_rev's old-code check
+  perform set_config('focus.app_state_save', 'on', true);
 
   -- A save racing this one waits on the row lock, then re-checks rev
   -- against the row it left behind, so only one of two saves at the same

@@ -26,8 +26,13 @@ const code = execFileSync(ESBUILD, ["--loader=jsx"], { input: readFileSync(path.
 function makeServer() {
   const srv = { rev: 0, json: null, saves: 0 };
   srv.read = () => srv.json == null ? null : JSON.parse(srv.json);
-  // a write by a tab still on the old code: a plain upsert, no rev check
-  srv.oldWrite = (data) => { srv.json = JSON.stringify(data); srv.rev++; };
+  // a write by a tab still on the old code: a plain upsert, no rev check —
+  // refused once the new app has saved (the row carries _sync), as the
+  // migration's trigger does
+  srv.oldWrite = (data) => {
+    if (srv.json != null && "_sync" in srv.read()) throw new Error("Focus: this tab runs old code; reload it to save");
+    srv.json = JSON.stringify(data); srv.rev++;
+  };
   return srv;
 }
 
@@ -44,7 +49,7 @@ function makeStorage(from) {
   };
 }
 
-function makeDevice(name, srv, storage = makeStorage()) {
+function makeDevice(name, srv, storage = makeStorage(), { random } = {}) {
   const warnings = [];
   const React = {
     useState: () => [], useEffect: () => {}, useRef: () => ({}), useCallback: (f) => f,
@@ -56,6 +61,9 @@ function makeDevice(name, srv, storage = makeStorage()) {
   });
   ctx.window = ctx;
   vm.runInContext(code, ctx, { filename: "store.jsx" });
+  // a chosen page id (createSync draws it from Math.random)
+  const realRandom = vm.runInContext("Math.random", ctx);
+  if (random) vm.runInContext("Math", ctx).random = random;
 
   const net = { offline: false, loseAnswer: false, gate: null };
   const api = {
@@ -81,6 +89,7 @@ function makeDevice(name, srv, storage = makeStorage()) {
 
   const dev = { name, ctx, net, storage, warnings, renders: 0 };
   dev.sync = ctx.createSync({ state: ctx.load(), onChange: () => { dev.renders++; }, onPulled: () => {} });
+  vm.runInContext("Math", ctx).random = realRandom;
   dev.start = (user = "u1") => dev.sync.start(user, api);
   dev.state = () => dev.sync.getState();
   dev.dispatch = (a) => dev.sync.dispatch(a);
@@ -294,16 +303,150 @@ test("two tabs that both took up a closed tab's log save it once", async () => {
   assert.equal(tasks(srv.read()).filter(t => t.text === "from the closed tab").length, 1);
 });
 
-test("a write from a tab still on the old code is not overwritten", async () => {
-  const { srv, A } = await twoDevices();
+test("a write from a tab on the old code, before the new app's first save, is kept", async () => {
+  const srv = makeServer();
+  const L = makeDevice("L", srv);
+  srv.oldWrite(JSON.parse(JSON.stringify(L.state())));   // the row as the old app left it
+  const A = makeDevice("A", srv);
+  A.start(); await A.flush();
+  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(A.state(), "Q3 roadmap draft").id, note: "new code" });
   const old = srv.read();
   old.projects.forEach(p => p.tasks.forEach(t => { if (t.text === "Reply to Diego") t.text = "edited on an old tab"; }));
-  srv.oldWrite(old);
-  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(A.state(), "Q3 roadmap draft").id, note: "new code" });
+  srv.oldWrite(old);   // still allowed: the new app hasn't saved yet
   await A.flush();
   const s = srv.read();
   assert.ok(taskByText(s, "edited on an old tab"));
   assert.equal(taskByText(s, "Q3 roadmap draft").note, "new code");
+});
+
+test("after the new app's first save, an old tab's plain write is refused", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "ADD_TASK", projectId: "self", text: "saved by new code" });
+  await A.flush();
+  const stale = srv.read(); delete stale._sync;
+  stale.projects.forEach(p => { p.tasks = p.tasks.filter(t => t.text !== "saved by new code"); });
+  assert.throws(() => srv.oldWrite(stale), /old code/);
+  assert.ok(taskByText(srv.read(), "saved by new code"));
+});
+
+test("reordering projects keeps a project the other device just added", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "ADD_PROJECT", name: "Garden" });
+  await A.flush();
+  B.dispatch({ type: "REORDER_PROJECTS", order: B.state().projects.map(p => p.id).reverse() });
+  await B.flush();
+  const s = srv.read();
+  assert.ok(s.projects.some(p => p.name === "Garden"));
+  assert.equal(s.projects[0].id, "self", "B's order still applied");
+});
+
+test("Hub tasks get the same id on every device, so edits land on the right one", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", tasks: [hubTask("h1", "One")], gone: [], sent: [] });
+  B.dispatch({ type: "HUB_SYNC", tasks: [hubTask("h1", "One"), hubTask("h2", "Two")], gone: [], sent: [] });
+  const b1 = tasks(B.state()).find(t => t.hub && t.hub.id === "h1").id;
+  B.dispatch({ type: "EDIT_TASK_NOTE", taskId: b1, note: "B's note on One" });
+  await A.flush(); await B.flush();
+  const s = srv.read();
+  assert.equal(hubCount(s, "h1"), 1); assert.equal(hubCount(s, "h2"), 1);
+  assert.equal(tasks(s).find(t => t.hub && t.hub.id === "h1").note, "B's note on One");
+  assert.notEqual(tasks(s).find(t => t.hub && t.hub.id === "h2").note, "B's note on One");
+});
+
+test("an older Hub sync played after a newer one doesn't undo it", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 500, tasks: [hubTask("h1", "One")], gone: [], sent: [] });
+  await A.flush(); await B.pull();
+  B.dispatch({ type: "HUB_SYNC", at: 1000, tasks: [hubTask("h1", "One", { title: "One (renamed in Hub)" }), hubTask("h2", "Two")], gone: [], sent: [] });
+  const id = tasks(A.state()).find(t => t.hub && t.hub.id === "h1").id;
+  A.dispatch({ type: "SET_STATUS", taskId: id, status: "done" });
+  A.dispatch({ type: "HUB_SYNC", at: 2000, tasks: [hubTask("h1", "One (renamed in Hub)", { done: true }), hubTask("h2", "Two")], gone: [], sent: [{ id: "h1", done: true }] });
+  A.dispatch({ type: "EDIT_TASK_TEXT", taskId: id, text: "One, my words" });
+  await A.flush(); await B.flush();
+  const got = tasks(srv.read()).find(t => t.hub && t.hub.id === "h1");
+  assert.equal(got.status, "done", "the confirmed check-off stays");
+  assert.equal(got.text, "One, my words", "the local rename stays");
+  assert.equal(hubCount(srv.read(), "h2"), 1);
+});
+
+test("offline edits across reloads keep their order, whatever the page ids", async () => {
+  const { srv } = await twoDevices();
+  const A1 = makeDevice("A1", srv, undefined, { random: () => 0.99 });
+  A1.net.offline = true; A1.start(); await A1.flush();
+  A1.dispatch({ type: "ADD_TASK", projectId: "self", id: "offline1", text: "made offline" });
+  A1.persist();
+  const A2 = makeDevice("A2", srv, makeStorage(A1.storage), { random: () => 0.01 });   // sorts first by page id
+  A2.net.offline = true; A2.start(); await A2.flush();
+  A2.dispatch({ type: "EDIT_TASK_NOTE", taskId: "offline1", note: "note after a reload" });
+  A2.persist();
+  const A3 = makeDevice("A3", srv, makeStorage(A2.storage));
+  A3.start(); await A3.flush();
+  assert.equal(taskById(srv.read(), "offline1").note, "note after a reload");
+});
+
+test("closing the quarter keeps a goal the other device just added", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "GOAL_ADD", scope: "quarter", text: "added on A" });
+  await A.flush();
+  const q = B.state().quarter;
+  const hits = { [q.goals[0].id]: true };
+  B.dispatch({ type: "ROLL_QUARTER", hits, next: { label: "Q9", range: "", goals: [] },
+    archive: { label: q.label, range: q.range, goals: q.goals.map(g => ({ text: g.text, done: !!hits[g.id], subs: [] })), journal: "", closedAt: 1 } });
+  await B.flush();
+  const arch = srv.read().quarterHistory[0];
+  assert.ok(arch.goals.some(g => g.text === "added on A"));
+  assert.equal(arch.goals[0].done, true, "B's marks still applied");
+  assert.equal(srv.read().quarter.label, "Q9");
+});
+
+test("first save to an empty server includes a closed tab's actions the cache lacked", async () => {
+  const srv = makeServer();
+  const shared = makeStorage();
+  const T = makeDevice("T", srv, shared);            // a tab loaded before X's edit
+  const X = makeDevice("X", srv, shared);
+  X.net.offline = true; X.start(); await X.flush();
+  X.dispatch({ type: "ADD_TASK", projectId: "self", id: "fromX", text: "from tab X" });
+  X.persist();
+  T.persist();                                        // T writes the cache last, without X's task
+  assert.ok(!taskById(makeDevice("peek", srv, makeStorage(shared)).state(), "fromX"));
+  const N = makeDevice("N", srv, makeStorage(shared));
+  N.start(); await N.flush();
+  assert.ok(taskById(srv.read(), "fromX"));
+});
+
+test("a habit day or recurring check-off made last week stays out of the new week", async () => {
+  const { srv, A, B } = await twoDevices();
+  const habit = taskByText(B.state(), "Hold AM/PM routine all 7 days");
+  const rec = taskByText(B.state(), "Reply to Diego");
+  B.dispatch({ type: "TOGGLE_RECURRING", taskId: rec.id });
+  await B.flush(); await A.pull();
+  B.dispatch({ type: "TOGGLE_HABIT_DAY", taskId: habit.id, day: 5 });
+  B.dispatch({ type: "SET_STATUS", taskId: rec.id, status: "done" });
+  A.dispatch({ type: "CLOSE_WEEK", journal: "" });
+  await A.flush(); await B.flush();
+  const s = srv.read();
+  assert.equal(taskById(s, habit.id).days.filter(Boolean).length, 0);
+  assert.equal(taskById(s, rec.id).status, "todo");
+});
+
+test("an add played twice (its _sync note gone) still makes one copy", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "ADD_TASK", projectId: "airbnb", text: "only once" });
+  A.dispatch({ type: "ADD_SUB", taskId: taskByText(A.state(), "Reply to Diego").id, text: "step once" });
+  A.dispatch({ type: "GOAL_ADD", scope: "quarter", text: "goal once" });
+  A.dispatch({ type: "ADD_PROJECT", name: "Project once" });
+  A.dispatch({ type: "ADD_SCHEDULED", text: "sched once" });
+  A.net.loseAnswer = true;
+  await A.flush();
+  const s0 = srv.read(); s0._sync = {}; srv.json = JSON.stringify(s0); srv.rev++;   // as if the note had been pruned
+  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(A.state(), "only once").id, note: "x" });
+  await A.flush();
+  const s = srv.read();
+  assert.equal(tasks(s).filter(t => t.text === "only once").length, 1);
+  assert.equal(taskByText(s, "Reply to Diego").subtasks.filter(x => x.text === "step once").length, 1);
+  assert.equal(s.quarter.goals.filter(g => g.text === "goal once").length, 1);
+  assert.equal(s.projects.filter(p => p.name === "Project once").length, 1);
+  assert.equal(s.scheduled.filter(x => x.text === "sched once").length, 1);
 });
 
 test("nothing is saved before the first pull works", async () => {

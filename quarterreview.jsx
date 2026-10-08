@@ -29,7 +29,9 @@ function QuarterReview({ onClose }) {
     };
     // more goals and sub-goals can be added on the tile afterwards
     const next = { label: label.trim() || "Next", range: range.trim(), goals: goals.map((g) => g.trim()).filter(Boolean) };
-    dispatch({ type: "ROLL_QUARTER", archive, next });
+    // hits by goal id: the store archives the goals as they are when this
+    // lands (one added on another device meanwhile is kept, unmarked)
+    dispatch({ type: "ROLL_QUARTER", archive, hits, next });
     onClose();
   }
 
