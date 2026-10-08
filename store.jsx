@@ -965,7 +965,7 @@ function applyAction(state, action) {
     // here — as { id, title, note, due, done, project, section }. A.gone: linked
     // ids the Hub no longer gives Ryan (deleted, or given to someone else).
     // A.sent: the [{ id, done }] this sync asked the Hub to apply.
-    // A linked task carries t.hub = { id, title, done } (plus a due of null):
+    // A linked task carries t.hub = { id, title, done, v: 2 } (plus a due of null):
     // what the Hub said last time. A field that differs from that snapshot
     // was changed on the side that differs, so each side's own edits survive:
     //  • done: differs from what was sent (or, if nothing was sent, from the
@@ -1010,19 +1010,21 @@ function applyAction(state, action) {
           const asked = sent.has(id) ? sent.get(id) : t.hub.done;
           const status = localDone !== asked ? t.status
             : h.done ? "done" : localDone ? "todo" : t.status;
-          // Clean-up for tasks linked before Hub due dates stopped coming
-          // over: a due still equal to the Hub's (as last seen) came from
-          // the Hub and goes; the snapshot keeps no due from here on, so a
-          // date set here later is never touched. Old notes began "From the
-          // Hub" — the hub tag already says so.
-          const hubDue = t.hub.due || null;
-          const note = typeof t.note === "string" ? t.note.replace(/^From the Hub(?: · | — |$)/, "") : t.note;
+          // One-time clean-up for tasks linked before Hub due dates stopped
+          // coming over (a snapshot without v: 2): a due still equal to the
+          // Hub's (as last seen) came from the Hub and goes, and a leading
+          // "From the Hub" leaves the note (the hub tag says so). Once the
+          // snapshot has v: 2, neither runs again, so a date or note set here
+          // later is never touched.
+          const old = t.hub.v !== 2;
+          const hubDue = old ? t.hub.due || null : null;
+          const note = old && typeof t.note === "string" ? t.note.replace(/^From the Hub(?: · | — |$)/, "") : t.note;
           const next = { ...t, status, note,
             text: h.title !== t.hub.title ? h.title : t.text,
             ...(hubDue && t.due === hubDue ? { due: null, duePromoted: false } : {}),
-            hub: { id, title: h.title, due: null, done: !!h.done } };
-          const same = next.status === t.status && next.text === t.text && next.due === t.due && next.note === t.note
-            && t.hub.title === next.hub.title && hubDue === null && t.hub.done === next.hub.done;
+            hub: { id, title: h.title, due: null, done: !!h.done, v: 2 } };
+          const same = !old && next.status === t.status && next.text === t.text
+            && t.hub.title === next.hub.title && t.hub.done === next.hub.done;
           if (same) return [t];
           touched = true;
           return [next];
@@ -1052,7 +1054,7 @@ function applyAction(state, action) {
           taken.add(id);
           return { id, text: h.title, status: "todo", note, big: null, lane: "queue", subtasks: [], type: "todo",
             days: reset7, target: 5, recurring: false, due: null, duePromoted: false,
-            hub: { id: h.id, title: h.title, due: null, done: false } };
+            hub: { id: h.id, title: h.title, due: null, done: false, v: 2 } };
         });
         const target = resolveProject(state, "motion");
         projects = target

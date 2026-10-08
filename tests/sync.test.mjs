@@ -674,6 +674,17 @@ test("tasks linked before the change lose the Hub's due date and the 'From the H
   assert.equal(taskById(s, "hub-h12").due, "2031-01-01", "a date changed in Focus stays");
   assert.equal(taskById(s, "hub-h12").note, "");
   assert.equal(taskById(s, "hub-h11").hub.due, null);
+  // the clean-up ran once: a note or date set here afterwards is left alone
+  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: "hub-h11", note: "From the Hub — keep this" });
+  A.dispatch({ type: "SET_DUE", taskId: "hub-h11", due: "2026-10-10" });
+  const revBefore = srv.rev;
+  A.dispatch({ type: "HUB_SYNC", at: 200, tasks: [hubTask("h11", "Eleven", { due: "2026-10-10" }), hubTask("h12", "Twelve", { due: "2030-12-01" })], gone: [], sent: [] });
+  await A.flush();
+  assert.equal(taskById(srv.read(), "hub-h11").note, "From the Hub — keep this");
+  assert.equal(taskById(srv.read(), "hub-h11").due, "2026-10-10");
+  A.dispatch({ type: "HUB_SYNC", at: 300, tasks: [hubTask("h11", "Eleven"), hubTask("h12", "Twelve")], gone: [], sent: [] });
+  await A.flush();
+  assert.equal(srv.rev, revBefore + 1, "an unchanged sync saves nothing");
 });
 
 test("nothing is saved before the first pull works", async () => {
