@@ -618,6 +618,20 @@ test("a delete made while the other device converted the item still lands", asyn
   assert.equal(tasks(s).flatMap(t => t.subtasks).filter(z => z.id === y.id).length, 0);
 });
 
+test("a Hub check-off cached by the code before this one reaches the server", async () => {
+  const { srv } = await twoDevices();
+  const storage = makeStorage();
+  const old = srv.read(); delete old._sync;
+  old.hubOutbox = [{ id: "h9", done: true }];          // the live code's cache: no _cached note
+  storage.setItem("focus.store.v1", JSON.stringify(old));
+  const A = makeDevice("A", srv, storage);
+  A.start(); await A.flush();
+  assert.equal(JSON.stringify(srv.read().hubOutbox), JSON.stringify([{ id: "h9", done: true }]));
+  const B = makeDevice("B", srv, makeStorage(A.storage));   // a cache from the new code: no carry-over
+  B.start(); await B.flush();
+  assert.equal(srv.read().hubOutbox.length, 1);
+});
+
 test("nothing is saved before the first pull works", async () => {
   const srv = makeServer();
   const A = makeDevice("A", srv);

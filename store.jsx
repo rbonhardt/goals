@@ -949,6 +949,17 @@ function applyAction(state, action) {
       return { ...state, hubIgnored, projects: state.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== A.taskId) })) };
     }
 
+    // Upgrade carry-over: the Hub outbox of a copy cached by the code before
+    // the sync log (see createSync), which may not have reached the server.
+    // This device's entries win on the same id, as they did on every pull then.
+    case "HUB_OUTBOX_KEEP": {
+      const mine = (A.entries || []).filter(c => c && typeof c.id === "string" && typeof c.done === "boolean");
+      const have = state.hubOutbox || [];
+      if (mine.every(c => have.some(x => x.id === c.id && x.done === c.done))) return state;
+      const ids = new Set(mine.map(c => c.id));
+      return { ...state, hubOutbox: [...have.filter(c => !ids.has(c.id)), ...mine] };
+    }
+
     // ---- Employee Hub link (see hublink.jsx) ----
     // A.tasks: Ryan's Hub tasks — every open one, plus any already linked
     // here — as { id, title, note, due, done, project, section }. A.gone: linked
@@ -1442,6 +1453,9 @@ function createSync({ state, onChange, onPulled }) {
   const pageKey = SYNC_KEY + "." + page;
   let cur = state;          // the state on screen
   let curHas = { ...(cacheNotes.get(state) || {}) };   // per page, the last log entry `cur` holds
+  // a copy cached by the code before the sync log (no _cached note): its Hub
+  // outbox goes on top of the first server copy (see HUB_OUTBOX_KEEP)
+  let carryOutbox = cacheNotes.has(state) ? [] : (state.hubOutbox || []);
   let user = null, api = null;
   let rev = null;           // the server rev the log is played on top of
   let marks = {};           // the server copy's _sync, as of the last pull or save
@@ -1598,6 +1612,11 @@ function createSync({ state, onChange, onPulled }) {
           rebase(row.rev, row.data);   // always, on the first pull (rev is null then)
         }
         pulled = true;
+        if (carryOutbox.length) {
+          const entries = carryOutbox;
+          carryOutbox = [];
+          dispatch({ type: "HUB_OUTBOX_KEEP", entries });
+        }
       } finally {
         if (my === epoch) onPulled();
       }
