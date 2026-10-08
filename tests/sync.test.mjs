@@ -577,6 +577,47 @@ test("a Hub answer that arrives late doesn't undo a newer one", async () => {
   assert.equal(tasks(srv.read()).find(t => t.hub && t.hub.id === "h6").text, "Six (new title)");
 });
 
+test("a Hub answer that lands after a pull brought a newer one is ignored", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h7", "Seven")], gone: [], sent: [] });
+  await A.flush(); await B.pull();
+  B.dispatch({ type: "HUB_SYNC", at: 2000, tasks: [hubTask("h7", "Seven (new)")], gone: [], sent: [] });
+  await B.flush();
+  await A.pull();   // A now holds B's newer answer
+  A.dispatch({ type: "HUB_SYNC", at: 1000, tasks: [hubTask("h7", "Seven (old)")], gone: [], sent: [] });
+  await A.flush();
+  assert.equal(tasks(A.state()).find(t => t.hub && t.hub.id === "h7").text, "Seven (new)");
+  assert.equal(tasks(srv.read()).find(t => t.hub && t.hub.id === "h7").text, "Seven (new)");
+});
+
+test("a Hub task nested into a step isn't imported again", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h8", "Eight")], gone: [], sent: [] });
+  const id = tasks(A.state()).find(t => t.hub && t.hub.id === "h8").id;
+  A.dispatch({ type: "NEST_TASK", taskId: id, intoTaskId: taskByText(A.state(), "Reply to Diego").id });
+  A.dispatch({ type: "HUB_SYNC", at: 200, tasks: [hubTask("h8", "Eight")], gone: [], sent: [] });
+  await A.flush();
+  const s = srv.read();
+  assert.equal(hubCount(s, "h8"), 0);
+  assert.equal(tasks(s).filter(t => t.id === id).length + tasks(s).flatMap(t => t.subtasks).filter(x => x.id === id).length, 1, "one thing with that id");
+});
+
+test("a delete made while the other device converted the item still lands", async () => {
+  const { srv, A, B } = await twoDevices();
+  const x = taskByText(A.state(), "Reply to Diego"), y = taskByText(A.state(), "Harada method — pg 26");
+  A.dispatch({ type: "ADD_SUB", taskId: x.id, text: "to delete" });
+  await A.flush(); await B.pull();
+  const sub = taskById(A.state(), x.id).subtasks[0];
+  A.dispatch({ type: "DEL_SUB", taskId: x.id, subId: sub.id });
+  A.dispatch({ type: "DELETE_TASK", taskId: y.id });
+  B.dispatch({ type: "PROMOTE_SUB_TO_TASK", fromTaskId: x.id, subId: sub.id, toProject: "self", toLane: "active", toIndex: null });
+  B.dispatch({ type: "NEST_TASK", taskId: y.id, intoTaskId: taskByText(B.state(), "Q3 roadmap draft").id });
+  await B.flush(); await A.flush();
+  const s = srv.read();
+  assert.equal(taskById(s, sub.id), undefined);
+  assert.equal(tasks(s).flatMap(t => t.subtasks).filter(z => z.id === y.id).length, 0);
+});
+
 test("nothing is saved before the first pull works", async () => {
   const srv = makeServer();
   const A = makeDevice("A", srv);

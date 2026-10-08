@@ -943,6 +943,8 @@ function applyAction(state, action) {
     case "DELETE_TASK": {
       // a Hub task deleted here stays deleted here (it is still open in the Hub)
       const { task } = findTask(state, A.taskId);
+      if (!task && findStep(state, A.taskId))   // nested into a step meanwhile
+        return mapTask(state, findStep(state, A.taskId).task.id, (t) => ({ ...t, subtasks: t.subtasks.filter(x => x.id !== A.taskId) }));
       const hubIgnored = task && task.hub ? [...(state.hubIgnored || []), task.hub.id] : state.hubIgnored;
       return { ...state, hubIgnored, projects: state.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== A.taskId) })) };
     }
@@ -965,14 +967,14 @@ function applyAction(state, action) {
       const byId = new Map(A.tasks.map(h => [h.id, h]));
       const gone = new Set(A.gone || []);
       const sent = new Map((A.sent || []).map(c => [c.id, c.done]));
-      // A sync's news is as of when it ran (pinned). Played again (see
-      // createSync) on a copy where another device has since applied a newer
-      // sync, it is old news: it only clears from the outbox what it
-      // delivered, and leaves the tasks as the newer sync set them.
+      // A sync's news is as of when the Hub answered (A.at, the server's
+      // clock — see hublink.jsx). Older than a sync already applied here or
+      // on another device (a late answer, or one played again on a newer
+      // copy — see createSync), it is old news: it only clears from the
+      // outbox what it delivered, and leaves the tasks as the newer one set them.
       const at = pinned(A, "at", () => A.at || Date.now());
-      const seen = pinned(A, "seen", () => state.hubAt || 0);
       const hubAt = state.hubAt || 0;
-      if (hubAt !== seen && hubAt > at) {
+      if (at < hubAt) {
         const left = (state.hubOutbox || []).filter(c => !(sent.has(c.id) && sent.get(c.id) === c.done));
         return left.length !== (state.hubOutbox || []).length ? { ...state, hubOutbox: left } : state;
       }
@@ -1024,7 +1026,7 @@ function applyAction(state, action) {
         // the id comes from the Hub's, so the same Hub task gets the same id
         // on every device and in every replay
         const taken = new Set();
-        projects.forEach(p => p.tasks.forEach(t => taken.add(t.id)));
+        projects.forEach(p => p.tasks.forEach(t => { taken.add(t.id); (t.subtasks || []).forEach(x => taken.add(x.id)); }));
         const add = fresh.map(h => {
           const where = [h.project, h.section].filter(Boolean).join(" / ");
           const note = ["From the Hub" + (where ? " · " + where : ""), (h.note || "").trim().slice(0, 300)].filter(Boolean).join(" — ");
@@ -1094,6 +1096,8 @@ function applyAction(state, action) {
         return mapTask(state, A.subId, (t) => ({ ...t, text: A.text }));
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, text: A.text } : s) }));
     case "DEL_SUB":
+      if (!findStep(state, A.subId) && findTask(state, A.subId).task)   // made a task meanwhile
+        return applyAction(state, { type: "DELETE_TASK", taskId: A.subId });
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.filter(s => s.id !== A.subId) }));
     case "MOVE_SUB":
       // reorder a subtask within its parent task to A.toIndex
@@ -1121,7 +1125,10 @@ function applyAction(state, action) {
       // the step keeps the task's id, so an edit made to the task elsewhere
       // meanwhile still finds it (see EDIT_TASK_TEXT / SET_STATUS)
       const sub = { id: task.id, text: task.text, done: task.status === "done" };
-      let s = mapTask(state, into.id, (t) => ({ ...t, subtasks: [...t.subtasks, sub] }));
+      // a Hub task folded into a step is gone from the list, as with a
+      // delete: it isn't imported again (see HUB_SYNC)
+      let s = task.hub ? { ...state, hubIgnored: [...(state.hubIgnored || []), task.hub.id] } : state;
+      s = mapTask(s, into.id, (t) => ({ ...t, subtasks: [...t.subtasks, sub] }));
       s = retargetItem(s, task.id, null, into.id, sub.id);
       return { ...s, projects: s.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== task.id) })) };
     }
