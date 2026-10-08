@@ -196,6 +196,9 @@ function migrate(s) {
   if (!s.month || !Array.isArray(s.month.goals)) s.month = { key: monthKey(), goals: [] };
   s.month.goals = tidyGoals(s.month.goals.map(normGoal));
   if (!Array.isArray(s.monthHistory)) s.monthHistory = [];
+  // Employee Hub link added later: Hub task ids deleted here on purpose, so
+  // the next sync doesn't bring them back (see HUB_SYNC)
+  if (!Array.isArray(s.hubIgnored)) s.hubIgnored = [];
   // day tabs added later: a list per day ahead (see planToday)
   if (!s.plans || typeof s.plans !== "object" || Array.isArray(s.plans)) s.plans = {};
   s.scheduled.forEach(it => {
@@ -812,8 +815,87 @@ function applyAction(state, action) {
       return { ...state, projects: state.projects.map(p =>
         p.id === A.projectId ? { ...p, tasks: A.toTop ? [t, ...p.tasks] : [...p.tasks, t] } : p) };
     }
-    case "DELETE_TASK":
-      return { ...state, projects: state.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== A.taskId) })) };
+    case "DELETE_TASK": {
+      // a Hub task deleted here stays deleted here (it is still open in the Hub)
+      const { task } = findTask(state, A.taskId);
+      const hubIgnored = task && task.hub ? [...(state.hubIgnored || []), task.hub.id] : state.hubIgnored;
+      return { ...state, hubIgnored, projects: state.projects.map(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== A.taskId) })) };
+    }
+
+    // ---- Employee Hub link (see hublink.jsx) ----
+    // A.tasks: Ryan's Hub tasks — every open one, plus any already linked
+    // here — as { id, title, note, due, done, project, section }. A.gone: linked
+    // ids the Hub no longer gives Ryan (deleted, or given to someone else).
+    // A linked task carries t.hub = { id, title, due, done }: what the Hub
+    // said last time. A field that differs from that snapshot was changed on
+    // the side that differs, so each side's own edits survive:
+    //  • done: changed here (not yet sent) → keep ours; else take the Hub's
+    //  • title / due: changed in the Hub → take the Hub's; else keep ours
+    // New open Hub tasks go to the Motion project's queue (a due date ≤ 10
+    // days out promotes them to This Week, like any task).
+    case "HUB_SYNC": {
+      const byId = new Map(A.tasks.map(h => [h.id, h]));
+      const gone = new Set(A.gone || []);
+      const linked = new Set();
+      let changed = false;
+      let projects = state.projects.map(p => {
+        let touched = false;
+        const tasks = p.tasks.flatMap(t => {
+          if (!t.hub) return [t];
+          const id = t.hub.id;
+          linked.add(id);
+          const h = byId.get(id);
+          if (!h) {
+            if (!gone.has(id)) return [t];
+            touched = true;
+            // no longer Ryan's in the Hub: drop it, unless it's already done
+            // here (then it stays as a plain finished task for the week)
+            return t.status === "done" ? [{ ...t, hub: null }] : [];
+          }
+          const due = h.due || null;
+          const localDone = t.status === "done";
+          const status = localDone !== t.hub.done ? t.status
+            : h.done ? "done" : localDone ? "todo" : t.status;
+          const next = { ...t, status,
+            text: h.title !== t.hub.title ? h.title : t.text,
+            ...(due !== (t.hub.due || null) ? { due: cleanDue(due), duePromoted: false } : {}),
+            hub: { id, title: h.title, due, done: !!h.done } };
+          const same = next.status === t.status && next.text === t.text && next.due === t.due
+            && t.hub.title === next.hub.title && (t.hub.due || null) === due && t.hub.done === next.hub.done;
+          if (same) return [t];
+          touched = true;
+          return [next];
+        });
+        return touched ? { ...p, tasks } : p;
+      });
+      if (projects.some((p, i) => p !== state.projects[i])) changed = true;
+
+      const ignored = new Set(state.hubIgnored || []);
+      const fresh = A.tasks.filter(h => !h.done && !linked.has(h.id) && !ignored.has(h.id));
+      if (fresh.length) {
+        const reset7 = [false, false, false, false, false, false, false];
+        const add = fresh.map(h => {
+          const where = [h.project, h.section].filter(Boolean).join(" / ");
+          const note = ["From the Hub" + (where ? " · " + where : ""), (h.note || "").trim().slice(0, 300)].filter(Boolean).join(" — ");
+          return { id: uid(), text: h.title, status: "todo", note, big: null, lane: "queue", subtasks: [], type: "todo",
+            days: reset7, target: 5, recurring: false, due: cleanDue(h.due), duePromoted: false,
+            hub: { id: h.id, title: h.title, due: h.due || null, done: false } };
+        });
+        const target = resolveProject(state, "motion");
+        projects = target
+          ? projects.map(p => p.id === target.id ? { ...p, tasks: [...p.tasks, ...add] } : p)
+          : [...projects, { id: uid(), name: "Motion", accent: "oklch(0.555 0.078 248)", queueOpen: false, tasks: add }];
+        changed = true;
+      }
+
+      // Forget deleted-here ids the Hub has closed or taken away, so the list
+      // can't grow forever.
+      const stillOpen = new Set(A.tasks.filter(h => !h.done).map(h => h.id));
+      const hubIgnored = (state.hubIgnored || []).filter(id => stillOpen.has(id));
+      if (hubIgnored.length !== (state.hubIgnored || []).length) changed = true;
+
+      return changed ? { ...state, projects, hubIgnored } : state;
+    }
 
     case "MOVE_TASK": {
       // move task to {toProject, toLane, toIndex} computed against the target lane's filtered list
@@ -1130,6 +1212,9 @@ const FocusCtx = createContext(null);
 function useReducerStore(userId) {
   const [state, setState] = useState(load);
   const dispatch = useCallback((action) => setState(s => reducer(s, action)), []);
+  // Bumps after every server pull (hit or miss), so work that must run on
+  // top of fresh state — the Hub link — knows when to go.
+  const [pulls, setPulls] = useState(0);
 
   // local cache — always on, gives instant paint and offline buffer
   useEffect(() => {
@@ -1169,6 +1254,7 @@ function useReducerStore(userId) {
         console.warn("[sync] pull failed:", e.message || e);
       } finally {
         hydrated.current = true;
+        if (alive) setPulls(n => n + 1);
       }
     }
     pull();
@@ -1192,7 +1278,7 @@ function useReducerStore(userId) {
     return () => clearTimeout(saveTimer.current);
   }, [state, userId]);
 
-  return { state, dispatch };
+  return { state, dispatch, pulls };
 }
 
 function FocusProvider({ children, userId }) {

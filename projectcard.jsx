@@ -336,6 +336,7 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
             {task.big && <span className="task-bigbadge" style={{ background: project.accent }}>{task.big}</span>}
             {isHabit && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }}>habit</span>}
             {!isHabit && task.recurring && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Repeats every week">weekly</span>}
+            {task.hub && <span className="habit-tag" style={{ color: project.accent, borderColor: project.accent }} title="Linked to the Employee Hub. Check it off here or there — the other side follows.">hub</span>}
             <window.InlineText value={task.text} onCommit={(t) => dispatch({ type: "EDIT_TASK_TEXT", taskId: task.id, text: t })}
               className={"task-text st-text-" + task.status} placeholder="Task…" />
             {planDay && task.status !== "done" && !showPlan && <PlanChip plan={planDay} chipRef={planRef} onEdit={() => setShowPlan(true)} />}

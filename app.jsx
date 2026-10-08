@@ -84,6 +84,7 @@ function SignIn() {
 function App({ session }) {
   const { state, dispatch } = window.useFocusStore();
   const [overlay, setOverlay] = React.useState(null); // "close" | "quarter" | "journal" | null
+  window.useHubLink(); // Employee Hub tasks ↔ the Motion project (hublink.jsx)
 
   React.useEffect(() => {
     window.__openQuarterReview = () => setOverlay("quarter");
