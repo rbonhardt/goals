@@ -558,19 +558,30 @@ function keepHubOutbox(prev, next) {
   return { ...next, hubOutbox: [...(next.hubOutbox || []).filter(c => !ids.has(c.id)), ...mine] };
 }
 
+// Check-offs the Hub sync request in flight is carrying ({ id → done });
+// hublink.jsx sets it around each request. Not saved: a reload drops the
+// request, and with it this.
+let hubInflight = new Map();
+function setHubInflight(changes) { hubInflight = new Map((changes || []).map(c => [c.id, c.done])); }
+
 // A linked task can leave the list (close week, delete, project deleted)
-// with a check-off the Hub hasn't had yet — or while a sync that carries an
-// older state of it is still in flight. So its final done state always goes
-// to the outbox, and the next sync sends it (a no-op when the Hub already
-// agrees). Until then the task can't be re-imported. HUB_SYNC's own removals
-// (gone from the Hub) are not pending work, so it skips this.
+// with a check-off the Hub hasn't had yet. Its done state then goes to the
+// outbox, and the next sync sends it; until then the task can't be
+// re-imported. "Hasn't had" = differs from what the Hub will hold: the
+// value in flight for it, else the last snapshot. A task that agrees leaves
+// nothing behind — so a reopen made in the Hub meanwhile is not undone.
+// HUB_SYNC's own removals (gone from the Hub) are not pending work, so it
+// skips this.
 function withHubOutbox(prev, next) {
   if (prev.projects === next.projects) return next;
   const still = new Set();
   next.projects.forEach(p => p.tasks.forEach(t => { if (t.hub) still.add(t.hub.id); }));
   const add = [];
   prev.projects.forEach(p => p.tasks.forEach(t => {
-    if (t.hub && !still.has(t.hub.id)) add.push({ id: t.hub.id, done: t.status === "done" });
+    if (!t.hub || still.has(t.hub.id)) return;
+    const done = t.status === "done";
+    const expected = hubInflight.has(t.hub.id) ? hubInflight.get(t.hub.id) : t.hub.done;
+    if (done !== expected) add.push({ id: t.hub.id, done });
   }));
   if (!add.length) return next;
   const ids = new Set(add.map(c => c.id));
@@ -1287,7 +1298,8 @@ function useReducerStore(userId) {
         const row = await window.supaPull(userId);
         if (!alive) return;
         if (row && row.data) {
-          setState(migrate(row.data));
+          // keep this device's Hub outbox: the server copy may predate it
+          setState(prev => keepHubOutbox(prev, migrate(row.data)));
         } else {
           // empty server row — seed it with whatever we have locally
           try { await window.supaPush(userId, state); } catch (e) {}
@@ -1394,4 +1406,4 @@ function selProgress(state) {
   return { done, total };
 }
 
-Object.assign(window, { FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selDay, selTodayKeys, selPlanDay, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS, monthKey });
+Object.assign(window, { setHubInflight, FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selDay, selTodayKeys, selPlanDay, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS, monthKey });

@@ -48,6 +48,7 @@ function useHubLink() {
     try {
       const s = stateRef.current;
       const changes = hubPendingChanges(s);
+      window.setHubInflight(changes);
       const { data, error } = await window.supaClient.functions.invoke("hub-link", {
         body: { changes, known: hubKnownIds(s) },
       });
@@ -61,6 +62,7 @@ function useHubLink() {
       // Offline or the link is down: the changes stay pending and go next time.
       console.warn("[hub-link] sync failed:", (e && e.message) || e);
     } finally {
+      window.setHubInflight([]);
       busy.current = false;
       if (again.current) { again.current = false; sync(); }
     }
