@@ -120,6 +120,7 @@ async function twoDevices() {
   return { srv, A, B };
 }
 
+const todayPlus = (dev, n) => vm.runInContext(`addDaysISO(todayISO(), ${n})`, dev.ctx);
 const hubTask = (id, title, extra = {}) => ({ id, title, note: "", due: null, done: false, project: "Ops", section: "", ...extra });
 
 const tests = [];
@@ -633,6 +634,46 @@ test("a Hub check-off cached by the code before this one reaches the server", as
   const B = makeDevice("B", srv, makeStorage(A.storage));   // a cache from the new code: no carry-over
   B.start(); await B.flush();
   assert.equal(srv.read().hubOutbox.length, 1);
+});
+
+test("Hub due dates stay in the Hub; notes don't say 'From the Hub'", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h10", "Ten", { due: todayPlus(A, 2), project: "Ops", section: "Front desk", note: "call Sam" })], gone: [], sent: [] });
+  let t = tasks(A.state()).find(x => x.hub && x.hub.id === "h10");
+  assert.equal(t.due, null, "no due date comes over");
+  assert.equal(t.lane, "queue", "so nothing promotes it to This Week");
+  assert.equal(t.note, "Ops / Front desk — call Sam");
+  A.dispatch({ type: "HUB_SYNC", at: 200, tasks: [hubTask("h10", "Ten", { due: todayPlus(A, 1) })], gone: [], sent: [] });
+  assert.equal(tasks(A.state()).find(x => x.hub && x.hub.id === "h10").due, null, "a due changed in the Hub doesn't come over either");
+  A.dispatch({ type: "SET_DUE", taskId: t.id, due: "2030-05-01" });
+  A.dispatch({ type: "HUB_SYNC", at: 300, tasks: [hubTask("h10", "Ten", { due: todayPlus(A, 3) })], gone: [], sent: [] });
+  assert.equal(tasks(A.state()).find(x => x.hub && x.hub.id === "h10").due, "2030-05-01", "a due set in Focus is kept");
+  await A.flush();
+  assert.equal(tasks(srv.read()).find(x => x.hub && x.hub.id === "h10").due, "2030-05-01");
+});
+
+test("tasks linked before the change lose the Hub's due date and the 'From the Hub' note", async () => {
+  const { srv, A } = await twoDevices();
+  // as the previous code left them
+  const old = srv.read();
+  const motion = old.projects.find(p => p.id === "motion");
+  motion.tasks.push(
+    { id: "hub-h11", text: "Eleven", status: "todo", note: "From the Hub · Ops — bring keys", big: null, lane: "active", subtasks: [], type: "todo",
+      days: [false, false, false, false, false, false, false], target: 5, recurring: false, due: "2026-10-10", duePromoted: true,
+      hub: { id: "h11", title: "Eleven", due: "2026-10-10", done: false } },
+    { id: "hub-h12", text: "Twelve", status: "todo", note: "From the Hub", big: null, lane: "queue", subtasks: [], type: "todo",
+      days: [false, false, false, false, false, false, false], target: 5, recurring: false, due: "2031-01-01", duePromoted: false,
+      hub: { id: "h12", title: "Twelve", due: "2030-12-01", done: false } });
+  srv.json = JSON.stringify(old); srv.rev++;
+  await A.pull();
+  A.dispatch({ type: "HUB_SYNC", at: 100, tasks: [hubTask("h11", "Eleven", { due: "2026-10-10" }), hubTask("h12", "Twelve", { due: "2030-12-01" })], gone: [], sent: [] });
+  await A.flush();
+  const s = srv.read();
+  assert.equal(taskById(s, "hub-h11").due, null, "the Hub's date goes");
+  assert.equal(taskById(s, "hub-h11").note, "Ops — bring keys");
+  assert.equal(taskById(s, "hub-h12").due, "2031-01-01", "a date changed in Focus stays");
+  assert.equal(taskById(s, "hub-h12").note, "");
+  assert.equal(taskById(s, "hub-h11").hub.due, null);
 });
 
 test("nothing is saved before the first pull works", async () => {

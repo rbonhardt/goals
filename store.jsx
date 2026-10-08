@@ -965,15 +965,16 @@ function applyAction(state, action) {
     // here — as { id, title, note, due, done, project, section }. A.gone: linked
     // ids the Hub no longer gives Ryan (deleted, or given to someone else).
     // A.sent: the [{ id, done }] this sync asked the Hub to apply.
-    // A linked task carries t.hub = { id, title, due, done }: what the Hub
-    // said last time. A field that differs from that snapshot was changed on
-    // the side that differs, so each side's own edits survive:
+    // A linked task carries t.hub = { id, title, done } (plus a due of null):
+    // what the Hub said last time. A field that differs from that snapshot
+    // was changed on the side that differs, so each side's own edits survive:
     //  • done: differs from what was sent (or, if nothing was sent, from the
     //    snapshot) → changed here meanwhile: keep ours, it goes next sync;
     //    else take the Hub's
-    //  • title / due: changed in the Hub → take the Hub's; else keep ours
-    // New open Hub tasks go to the Motion project's queue (a due date ≤ 10
-    // days out promotes them to This Week, like any task).
+    //  • title: changed in the Hub → take the Hub's; else keep ours
+    // Hub due dates stay in the Hub (Ryan's call: they cluttered the cards).
+    // A due date set here is Focus's own and is kept.
+    // New open Hub tasks go to the Motion project's queue.
     case "HUB_SYNC": {
       const byId = new Map(A.tasks.map(h => [h.id, h]));
       const gone = new Set(A.gone || []);
@@ -1005,17 +1006,23 @@ function applyAction(state, action) {
             // here (then it stays as a plain finished task for the week)
             return t.status === "done" ? [{ ...t, hub: null }] : [];
           }
-          const due = h.due || null;
           const localDone = t.status === "done";
           const asked = sent.has(id) ? sent.get(id) : t.hub.done;
           const status = localDone !== asked ? t.status
             : h.done ? "done" : localDone ? "todo" : t.status;
-          const next = { ...t, status,
+          // Clean-up for tasks linked before Hub due dates stopped coming
+          // over: a due still equal to the Hub's (as last seen) came from
+          // the Hub and goes; the snapshot keeps no due from here on, so a
+          // date set here later is never touched. Old notes began "From the
+          // Hub" — the hub tag already says so.
+          const hubDue = t.hub.due || null;
+          const note = typeof t.note === "string" ? t.note.replace(/^From the Hub(?: · | — |$)/, "") : t.note;
+          const next = { ...t, status, note,
             text: h.title !== t.hub.title ? h.title : t.text,
-            ...(due !== (t.hub.due || null) ? { due: cleanDue(due), duePromoted: false } : {}),
-            hub: { id, title: h.title, due, done: !!h.done } };
-          const same = next.status === t.status && next.text === t.text && next.due === t.due
-            && t.hub.title === next.hub.title && (t.hub.due || null) === due && t.hub.done === next.hub.done;
+            ...(hubDue && t.due === hubDue ? { due: null, duePromoted: false } : {}),
+            hub: { id, title: h.title, due: null, done: !!h.done } };
+          const same = next.status === t.status && next.text === t.text && next.due === t.due && next.note === t.note
+            && t.hub.title === next.hub.title && hubDue === null && t.hub.done === next.hub.done;
           if (same) return [t];
           touched = true;
           return [next];
@@ -1040,12 +1047,12 @@ function applyAction(state, action) {
         projects.forEach(p => p.tasks.forEach(t => { taken.add(t.id); (t.subtasks || []).forEach(x => taken.add(x.id)); }));
         const add = fresh.map(h => {
           const where = [h.project, h.section].filter(Boolean).join(" / ");
-          const note = ["From the Hub" + (where ? " · " + where : ""), (h.note || "").trim().slice(0, 300)].filter(Boolean).join(" — ");
+          const note = [where, (h.note || "").trim().slice(0, 300)].filter(Boolean).join(" — ");
           const id = taken.has("hub-" + h.id) ? uid() : "hub-" + h.id;
           taken.add(id);
           return { id, text: h.title, status: "todo", note, big: null, lane: "queue", subtasks: [], type: "todo",
-            days: reset7, target: 5, recurring: false, due: cleanDue(h.due), duePromoted: false,
-            hub: { id: h.id, title: h.title, due: h.due || null, done: false } };
+            days: reset7, target: 5, recurring: false, due: null, duePromoted: false,
+            hub: { id: h.id, title: h.title, due: null, done: false } };
         });
         const target = resolveProject(state, "motion");
         projects = target
