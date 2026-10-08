@@ -5,7 +5,13 @@
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
 
 const STORE_KEY = "focus.store.v1";
-const uid = () => Math.random().toString(36).slice(2, 9);
+const SYNC_KEY = "focus.sync.v1";   // actions not saved to the server yet (see createSync)
+const randomId = () => Math.random().toString(36).slice(2, 9);
+// While an action runs through runAction, uid() comes off that action's own
+// list of ids, so playing it again (on top of a newer server copy) mints the
+// same ids — a task added here keeps its id, and what points at it still works.
+let uidTape = null;
+const uid = () => uidTape ? uidTape() : randomId();
 
 // ---- accent palette (project colors) ----
 window.ACCENTS = [
@@ -545,17 +551,31 @@ function reducer(state, action) {
   const timer = action.type === "DUE_TICK";
   const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
   const next = sinkDone(applyAction(base, action));
-  // A pull replaces the state wholesale; the outbox here may hold check-offs
-  // the server copy never saw, so it survives (ours win on the same id).
-  if (action.type === "HYDRATE") return keepHubOutbox(state, rollDay(next));
+  if (action.type === "HYDRATE") return rollDay(next);
   return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next);
 }
 
-function keepHubOutbox(prev, next) {
-  const mine = prev.hubOutbox || [];
-  if (!mine.length) return next;
-  const ids = new Set(mine.map(c => c.id));
-  return { ...next, hubOutbox: [...(next.hubOutbox || []).filter(c => !ids.has(c.id)), ...mine] };
+// Run one action the way the store does: through the reducer, with uid()
+// reading from — and on the first run, writing to — the action's own id
+// list (A.__ids). See createSync: an action may run again later, on top of a
+// newer copy from the server, and must do the same thing there.
+function runAction(state, A) {
+  const ids = A.__ids || (A.__ids = []);
+  let i = 0;
+  uidTape = () => {
+    if (i === ids.length) ids.push(randomId());
+    return ids[i++];
+  };
+  try { return reducer(state, A); } finally { uidTape = null; }
+}
+
+// A choice an action makes from the state it lands on — "check it", not
+// "flip it" — fixed on its first run (kept in A.__pin), so the action does
+// the same thing when it runs again on a newer copy.
+function pinned(A, key, value) {
+  const pin = A.__pin || (A.__pin = {});
+  if (!(key in pin)) pin[key] = value();
+  return pin[key];
 }
 
 // Check-offs the Hub sync request in flight is carrying ({ id → done });
@@ -609,7 +629,7 @@ function applyAction(state, action) {
     }
     case "GOAL_TOGGLE": {
       const at = goalTarget(state, A);
-      return at ? at.put(mapGoal(at.list, A.id, g => ({ ...g, done: !g.done }))) : state;
+      return at ? at.put(mapGoal(at.list, A.id, g => ({ ...g, done: pinned(A, "done", () => !g.done) }))) : state;
     }
     case "GOAL_EDIT": {
       const at = goalTarget(state, A), text = String(A.text || "").trim();
@@ -692,14 +712,14 @@ function applyAction(state, action) {
     // ---- tasks ----
     case "CYCLE_STATUS": {
       const next = { todo: "doing", doing: "done", done: "todo" };
-      return mapTask(state, A.taskId, (t) => ({ ...t, status: next[t.status] }));
+      return mapTask(state, A.taskId, (t) => ({ ...t, status: pinned(A, "status", () => next[t.status]) }));
     }
     case "TOGGLE_HABIT_DAY":
       // A.day may be "today": resolved here, at click time, so a tab left open
       // across midnight marks the right day
       return mapTask(state, A.taskId, (t) => {
-        const day = A.day === "today" ? weekdayIdx(todayISO()) : A.day;
-        const days = t.days.slice(); days[day] = !days[day];
+        const day = pinned(A, "day", () => A.day === "today" ? weekdayIdx(todayISO()) : A.day);
+        const days = t.days.slice(); days[day] = pinned(A, "on", () => !days[day]);
         const hit = days.filter(Boolean).length;
         const status = hit >= (t.target || 5) ? "done" : hit > 0 ? "doing" : "todo";
         return { ...t, days, status };
@@ -718,7 +738,7 @@ function applyAction(state, action) {
         ? { ...t, type: "habit", days: t.days || [false,false,false,false,false,false,false], target: t.target || 5, status: "todo", recurring: true, due: null, duePromoted: false }
         : { ...t, type: "todo", status: "todo" });
     case "TOGGLE_RECURRING":
-      return mapTask(state, A.taskId, (t) => ({ ...t, recurring: !t.recurring }));
+      return mapTask(state, A.taskId, (t) => ({ ...t, recurring: pinned(A, "on", () => !t.recurring) }));
     case "SET_STATUS":
       return mapTask(state, A.taskId, (t) => ({ ...t, status: A.status }));
     case "EDIT_TASK_TEXT":
@@ -812,7 +832,7 @@ function applyAction(state, action) {
     }
     case "TODAY_TOGGLE": {
       const k = todayKey(A.taskId, A.subId);
-      const on = state.today.items.some(it => todayKey(it.taskId, it.subId) === k);
+      const on = pinned(A, "on", () => state.today.items.some(it => todayKey(it.taskId, it.subId) === k));
       return applyAction(state, { ...A, type: on ? "TODAY_REMOVE" : "TODAY_ADD" });
     }
     case "TODAY_NEW": {
@@ -985,7 +1005,7 @@ function applyAction(state, action) {
     case "ADD_SUB":
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: [...t.subtasks, { id: uid(), text: A.text, done: false }] }));
     case "TOGGLE_SUB":
-      return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, done: !s.done } : s) }));
+      return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, done: pinned(A, "done", () => !s.done) } : s) }));
     case "EDIT_SUB":
       return mapTask(state, A.taskId, (t) => ({ ...t, subtasks: t.subtasks.map(s => s.id === A.subId ? { ...s, text: A.text } : s) }));
     case "DEL_SUB":
@@ -1066,7 +1086,7 @@ function applyAction(state, action) {
 
     // ---- projects ----
     case "TOGGLE_QUEUE":
-      return { ...state, projects: state.projects.map(p => p.id === A.projectId ? { ...p, queueOpen: !p.queueOpen } : p) };
+      return { ...state, projects: state.projects.map(p => p.id === A.projectId ? { ...p, queueOpen: pinned(A, "open", () => !p.queueOpen) } : p) };
     case "ADD_PROJECT": {
       const used = state.projects.map(p => p.accent);
       const accent = A.accent || (window.ACCENTS.find(a => !used.includes(a.val)) || window.ACCENTS[state.projects.length % window.ACCENTS.length]).val;
@@ -1097,7 +1117,7 @@ function applyAction(state, action) {
       // done-state is per period: A.periodKey is the week startISO (weekly)
       // or "YYYY-MM" (monthly); a stale doneFor simply stops matching
       return { ...state, scheduled: state.scheduled.map(it => it.id !== A.id ? it
-        : it.doneFor === A.periodKey ? { ...it, doneFor: null, doneAt: null }
+        : pinned(A, "off", () => it.doneFor === A.periodKey) ? { ...it, doneFor: null, doneAt: null }
         : { ...it, doneFor: A.periodKey, doneAt: A.todayISO }) };
     case "EDIT_SCHEDULED_TEXT":
       return { ...state, scheduled: state.scheduled.map(it => it.id === A.id ? { ...it, text: A.text } : it) };
@@ -1115,6 +1135,9 @@ function applyAction(state, action) {
 
     // ---- close the week ----
     case "CLOSE_WEEK": {
+      // closes the week it was clicked on, once: played again on a copy
+      // where another device already closed it, it does nothing
+      if (pinned(A, "week", () => state.week.startISO) !== state.week.startISO) return state;
       const completed = [];
       state.projects.forEach(p => p.tasks.forEach(t => {
         if (t.status === "done") {
@@ -1157,6 +1180,8 @@ function applyAction(state, action) {
 
     // ---- quarter rollover ----
     case "ROLL_QUARTER":
+      // same: rolls the quarter it was clicked on, once
+      if (pinned(A, "from", () => state.quarter.label + "|" + state.quarter.range) !== state.quarter.label + "|" + state.quarter.range) return state;
       return {
         ...state,
         quarterHistory: [A.archive, ...(state.quarterHistory || [])],
@@ -1260,131 +1285,243 @@ function resolveProject(state, ref) {
 }
 
 // ============================================================
+// sync — this device's copy and the server's (the calls are in sync.jsx)
+// ============================================================
+// The server row has a revision number, `rev`, that goes up by one on every
+// save. A save says which rev its copy is built on, and only lands if the
+// row is still at it; if another device saved first, the server hands back
+// its copy instead. So no device can overwrite another's work:
+//  • Every action done here goes in a log, and stays there until a save
+//    that carries it lands.
+//  • When the server has moved on (a pull shows a newer rev, or a save is
+//    turned down), the log runs again on top of the server's copy, and that
+//    is saved. Both devices' edits survive; where both changed the same
+//    thing, the action that runs last wins. runAction and pinned make an
+//    action do the same thing when it runs again: the same new ids, "check
+//    it" rather than "flip it", a week closed once.
+//  • Each save notes, per page, the last log entry it carries (data._sync).
+//    A save whose answer got lost may have landed anyway: its entries are
+//    then in the server's copy, and are dropped instead of run twice.
+//  • The log is kept in localStorage, one key per page. Edits made offline,
+//    or in a tab closed before they were saved, go up after the next load.
+// Nothing is sent before a pull has worked: until then this copy may be
+// missing what other devices did.
+const SYNC_MARK_DAYS = 30;   // a page's _sync note goes this long after its last save
+
+function createSync({ state, onChange, onPulled }) {
+  const page = randomId() + randomId();   // this page load; its log entries carry it
+  const pageKey = SYNC_KEY + "." + page;
+  let cur = state;          // the state on screen
+  let user = null, api = null;
+  let rev = null;           // the server rev the log is played on top of
+  let marks = {};           // the server copy's _sync, as of the last pull or save
+  let log = [];             // [{ c: page, s: 1, 2, 3…, a: action }], oldest first
+  let seq = 0;              // the last s this page handed out
+  let pulled = false;       // a pull has worked since start
+  let seedIt = false;       // the server has no copy yet: ours goes up, log or not
+  let epoch = 0;            // moves on at stop, so work for the last user drops out
+  let timer = null;
+  let chain = Promise.resolve();
+
+  function show(next) {
+    if (next === cur) return;
+    cur = next;
+    onChange(next);
+  }
+
+  function dispatch(action) {
+    const a = { ...action };    // its own copy: runAction writes the ids and pins onto it
+    const next = runAction(cur, a);
+    if (next === cur) return;   // changed nothing: nothing to save or run again
+    log.push({ c: page, s: ++seq, a });
+    show(next);
+    clearTimeout(timer);
+    timer = setTimeout(flush, 800);
+  }
+
+  // The screen copy (instant paint, offline) and this page's log.
+  function persist() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(cur)); } catch (e) {}
+    if (!user) return;
+    try {
+      if (log.length) localStorage.setItem(pageKey, JSON.stringify({ user, log }));
+      else localStorage.removeItem(pageKey);
+    } catch (e) {}
+  }
+
+  // Logs left behind for this user — by closed tabs, reloads, or this page
+  // before a sign-out. They join this page's log, and other pages' keys go,
+  // so a closed tab's actions are taken up once. A tab still open writes its
+  // key again on its next change; the _sync notes then keep the same action
+  // from landing twice.
+  function adopt() {
+    const out = [], seen = new Set(log.map(e => e.c + ":" + e.s));
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(SYNC_KEY + ".")) keys.push(k);
+      }
+      keys.forEach(k => {
+        let rec = null;
+        try { rec = JSON.parse(localStorage.getItem(k)); } catch (e) {}
+        if (rec && rec.user !== user) return;   // another account's: leave it
+        if (rec && Array.isArray(rec.log)) rec.log.forEach(e => {
+          const id = e && e.c + ":" + e.s;
+          if (!e || !e.a || typeof e.a.type !== "string" || typeof e.c !== "string" || !(e.s > 0) || seen.has(id)) return;
+          seen.add(id);
+          out.push(e);
+        });
+        if (k !== pageKey) localStorage.removeItem(k);
+      });
+    } catch (e) {}
+    // each page's entries in their own order: a save carries a prefix of the
+    // log, and a _sync note of s = 5 must mean that page's 1-5 all went up
+    return out.sort((x, y) => x.c < y.c ? -1 : x.c > y.c ? 1 : x.s - y.s);
+  }
+
+  // The server moved on: its copy, with the log run again on top.
+  function rebase(newRev, data) {
+    const { _sync, ...rest } = data;
+    marks = _sync && typeof _sync === "object" && !Array.isArray(_sync) ? _sync : {};
+    log = log.filter(e => !(marks[e.c] && marks[e.c].s >= e.s));
+    let next = migrate(rest);
+    log = log.filter(e => {
+      // one bad entry must not stop every save after it
+      try { next = runAction(next, e.a); return true; }
+      catch (err) { console.warn("[sync] dropped an action that no longer applies:", e.a.type, (err && err.message) || err); return false; }
+    });
+    rev = newRev;
+    seedIt = false;   // the server has a copy after all
+    show(next);
+    persist();
+  }
+
+  // The _sync note for a save carrying `sent`: per page, its last entry.
+  function noteFor(sent) {
+    const now = Date.now(), out = {};
+    Object.keys(marks).forEach(c => {
+      const m = marks[c];
+      if (m && now - (m.t || 0) < SYNC_MARK_DAYS * 864e5) out[c] = m;
+    });
+    sent.forEach(e => { if (!out[e.c] || out[e.c].s < e.s) out[e.c] = { s: e.s, t: now }; });
+    return out;
+  }
+
+  // Save until the server takes it, or give up after a few rounds (the log
+  // stays, and the next change or refocus tries again).
+  async function push(my) {
+    for (let tries = 0; tries < 5; tries++) {
+      if (my !== epoch || !pulled || (!log.length && !seedIt)) return;
+      const n = log.length;   // `cur` is the server's copy plus exactly these
+      const _sync = noteFor(log.slice(0, n));
+      const res = await api.save(rev, { ...cur, _sync });
+      if (my !== epoch) return;
+      if (res.ok) {
+        rev = res.rev;
+        marks = _sync;
+        log = log.slice(n);   // what came in during the save waits for the next one
+        seedIt = false;
+        persist();
+        return;
+      }
+      if (res.data == null) { rev = res.rev == null ? 0 : res.rev; seedIt = true; continue; }
+      rebase(res.rev, res.data);   // another device saved first: on top of theirs, then again
+    }
+    throw new Error("the server copy kept changing; will try again");
+  }
+
+  async function step(wantPull, my) {
+    if (wantPull || !pulled) {
+      try {
+        const row = await api.pull();
+        if (my !== epoch) return;
+        if (!row || row.data == null) {
+          rev = row ? row.rev : 0;   // nothing on the server: ours goes up as the first copy
+          seedIt = true;
+        } else if (row.rev !== rev) {
+          rebase(row.rev, row.data);   // always, on the first pull (rev is null then)
+        }
+        pulled = true;
+      } finally {
+        if (my === epoch) onPulled();
+      }
+    }
+    await push(my);
+  }
+
+  // Server calls go one at a time, in order. Work queued for a user since
+  // signed out does nothing.
+  function run(wantPull) {
+    if (!api) return Promise.resolve();
+    const my = epoch;
+    chain = chain.then(() => my === epoch ? step(wantPull, my) : undefined)
+      .catch(e => console.warn("[sync]", (e && e.message) || e));
+    return chain;
+  }
+  function flush() { clearTimeout(timer); return run(false); }
+  function pull() { return run(true); }
+
+  function start(u, a) {
+    epoch++;
+    user = u; api = a;
+    rev = null; marks = {}; pulled = false; seedIt = false;
+    log = [...adopt(), ...log];
+    persist();
+    pull();
+    return stop;
+  }
+  function stop() {
+    epoch++;
+    clearTimeout(timer);
+    user = null; api = null;
+    log = [];   // a signed-out user's actions must not go to the next one's row
+  }
+
+  return { dispatch, persist, flush, pull, start, getState: () => cur };
+}
+
+// ============================================================
 // hook + context
 // ============================================================
 const FocusCtx = createContext(null);
 
 function useReducerStore(userId) {
   const [state, setState] = useState(load);
-  const dispatch = useCallback((action) => setState(s => reducer(s, action)), []);
   // Bumps after every server pull (hit or miss), so work that must run on
   // top of fresh state — the Hub link — knows when to go.
   const [pulls, setPulls] = useState(0);
+  const [sync] = useState(() => createSync({ state, onChange: setState, onPulled: () => setPulls(n => n + 1) }));
+  const dispatch = sync.dispatch;
 
   // local cache — always on, gives instant paint and offline buffer
-  useEffect(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
-  }, [state]);
+  useEffect(() => { sync.persist(); }, [state, sync]);
 
   // A tab left open across midnight would otherwise never re-run promoteDue
   // (it only fires inside the reducer). The unknown action is a no-op for
   // applyAction, so when nothing qualifies the same state object comes back
-  // and React skips the render.
+  // and nothing is logged or rendered.
   useEffect(() => {
     const t = setInterval(() => dispatch({ type: "DUE_TICK" }), 60 * 60 * 1000);
     return () => clearInterval(t);
   }, [dispatch]);
 
-  // ---- remote sync (only when authed) ----
-  // Pull on auth-ready and on tab refocus. First-load migration: if the
-  // server row is empty and localStorage has something, push the local copy
-  // up so we don't lose anything when sync turns on for the first time.
-  //
-  // A refocus pull must never load an older server copy over local edits
-  // that are not on the server yet. So: leaving the tab pushes at once
-  // (no 800 ms wait), and a refocus pull first waits for that push. If local
-  // still has unsaved edits after that (a push failed, or the user edited
-  // while the pull was out), local wins and the server copy is dropped.
-  const hydrated = useRef(false);
-  const stateRef = useRef(state);   // latest committed state
-  const saveTimer = useRef(null);   // debounced push
-  const pending = useRef(null);     // state not yet sent to the server
-  const inflight = useRef(null);    // the push chain now running
-  const pushSeq = useRef(0);        // +1 per push taken, and on user change
-
-  // Send the pending state now. Pushes run one after another, so an older
-  // copy can never land on top of a newer one. Resolves when all are done.
-  const flush = useCallback(() => {
-    clearTimeout(saveTimer.current);
-    const data = pending.current;
-    if (!data || !userId || !window.supaPush) return inflight.current || Promise.resolve();
-    pending.current = null;
-    const seq = ++pushSeq.current;
-    const p = (inflight.current || Promise.resolve())
-      .then(() => window.supaPush(userId, data))
-      .catch(e => {
-        console.warn("[sync] push failed:", e.message || e);
-        // still unsaved — keep it for the next try, unless a newer copy was
-        // taken or is waiting, or the user changed
-        if (seq === pushSeq.current && !pending.current) pending.current = data;
-      })
-      .finally(() => { if (inflight.current === p) inflight.current = null; });
-    inflight.current = p;
-    return p;
-  }, [userId]);
-
+  // ---- remote sync (only when authed; see createSync) ----
+  // Pull on sign-in and on tab refocus. Leaving the tab saves at once
+  // instead of waiting out the 800 ms.
   useEffect(() => {
-    if (!userId || !window.supaPull) return;
-    hydrated.current = false;
-    let alive = true;
-    async function pull() {
-      try {
-        const base = stateRef.current;   // any edit after this point wins
-        await flush();
-        const row = await window.supaPull(userId);
-        if (!alive) return;
-        // first load = no pull has finished yet (one started while the first
-        // was out must not win over edits made after the first landed)
-        const first = !hydrated.current;
-        if (row && row.data) {
-          const next = migrate(row.data);
-          // keep this device's Hub outbox: the server copy may predate it
-          if (first) { setState(prev => keepHubOutbox(prev, next)); return; }
-          if (pending.current || inflight.current) return;   // unsaved local edits
-          setState(cur => cur === base ? keepHubOutbox(cur, next) : cur);   // edited since the pull began
-        } else {
-          // empty server row — seed it with whatever we have locally, through
-          // the push queue. Saves are on from here, so edits made while the
-          // seed is out queue up behind it instead of being dropped.
-          hydrated.current = true;
-          pending.current = pending.current || stateRef.current;
-          await flush();
-        }
-      } catch (e) {
-        // network/auth error: keep showing local cache, don't blow up
-        console.warn("[sync] pull failed:", e.message || e);
-      } finally {
-        hydrated.current = true;
-        if (alive) setPulls(n => n + 1);
-      }
-    }
-    pull();
+    if (!userId || !window.supaApi) return;
+    const stop = sync.start(userId, window.supaApi(userId));
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") flush();
-      else if (document.visibilityState === "visible") pull();
+      if (document.visibilityState === "hidden") sync.flush();
+      else if (document.visibilityState === "visible") sync.pull();
     };
     window.addEventListener("visibilitychange", onVisibility);
     return () => {
-      alive = false;
       window.removeEventListener("visibilitychange", onVisibility);
-      clearTimeout(saveTimer.current);
-      pending.current = null;
-      pushSeq.current++;   // a failed push from this user must not come back
+      stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
-
-  // Debounced push on every state change. We skip the first burst until
-  // the initial pull completes — otherwise we'd race-clobber the server row
-  // with the unhydrated local state.
-  useEffect(() => {
-    stateRef.current = state;
-    if (!userId || !window.supaPush) return;
-    if (!hydrated.current) return;
-    pending.current = state;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(flush, 800);
-  }, [state, userId, flush]);
+  }, [userId, sync]);
 
   return { state, dispatch, pulls };
 }
