@@ -1289,21 +1289,66 @@ function useReducerStore(userId) {
   // Pull on auth-ready and on tab refocus. First-load migration: if the
   // server row is empty and localStorage has something, push the local copy
   // up so we don't lose anything when sync turns on for the first time.
+  //
+  // A refocus pull must never load an older server copy over local edits
+  // that are not on the server yet. So: leaving the tab pushes at once
+  // (no 800 ms wait), and a refocus pull first waits for that push. If local
+  // still has unsaved edits after that (a push failed, or the user edited
+  // while the pull was out), local wins and the server copy is dropped.
   const hydrated = useRef(false);
+  const stateRef = useRef(state);   // latest committed state
+  const saveTimer = useRef(null);   // debounced push
+  const pending = useRef(null);     // state not yet sent to the server
+  const inflight = useRef(null);    // the push chain now running
+  const pushSeq = useRef(0);        // +1 per push taken, and on user change
+
+  // Send the pending state now. Pushes run one after another, so an older
+  // copy can never land on top of a newer one. Resolves when all are done.
+  const flush = useCallback(() => {
+    clearTimeout(saveTimer.current);
+    const data = pending.current;
+    if (!data || !userId || !window.supaPush) return inflight.current || Promise.resolve();
+    pending.current = null;
+    const seq = ++pushSeq.current;
+    const p = (inflight.current || Promise.resolve())
+      .then(() => window.supaPush(userId, data))
+      .catch(e => {
+        console.warn("[sync] push failed:", e.message || e);
+        // still unsaved — keep it for the next try, unless a newer copy was
+        // taken or is waiting, or the user changed
+        if (seq === pushSeq.current && !pending.current) pending.current = data;
+      })
+      .finally(() => { if (inflight.current === p) inflight.current = null; });
+    inflight.current = p;
+    return p;
+  }, [userId]);
+
   useEffect(() => {
     if (!userId || !window.supaPull) return;
     hydrated.current = false;
     let alive = true;
     async function pull() {
       try {
+        const base = stateRef.current;   // any edit after this point wins
+        await flush();
         const row = await window.supaPull(userId);
         if (!alive) return;
+        // first load = no pull has finished yet (one started while the first
+        // was out must not win over edits made after the first landed)
+        const first = !hydrated.current;
         if (row && row.data) {
+          const next = migrate(row.data);
           // keep this device's Hub outbox: the server copy may predate it
-          setState(prev => keepHubOutbox(prev, migrate(row.data)));
+          if (first) { setState(prev => keepHubOutbox(prev, next)); return; }
+          if (pending.current || inflight.current) return;   // unsaved local edits
+          setState(cur => cur === base ? keepHubOutbox(cur, next) : cur);   // edited since the pull began
         } else {
-          // empty server row — seed it with whatever we have locally
-          try { await window.supaPush(userId, state); } catch (e) {}
+          // empty server row — seed it with whatever we have locally, through
+          // the push queue. Saves are on from here, so edits made while the
+          // seed is out queue up behind it instead of being dropped.
+          hydrated.current = true;
+          pending.current = pending.current || stateRef.current;
+          await flush();
         }
       } catch (e) {
         // network/auth error: keep showing local cache, don't blow up
@@ -1314,25 +1359,32 @@ function useReducerStore(userId) {
       }
     }
     pull();
-    const onFocus = () => { if (document.visibilityState === "visible") pull(); };
-    window.addEventListener("visibilitychange", onFocus);
-    return () => { alive = false; window.removeEventListener("visibilitychange", onFocus); };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+      else if (document.visibilityState === "visible") pull();
+    };
+    window.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      alive = false;
+      window.removeEventListener("visibilitychange", onVisibility);
+      clearTimeout(saveTimer.current);
+      pending.current = null;
+      pushSeq.current++;   // a failed push from this user must not come back
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   // Debounced push on every state change. We skip the first burst until
   // the initial pull completes — otherwise we'd race-clobber the server row
   // with the unhydrated local state.
-  const saveTimer = useRef(null);
   useEffect(() => {
+    stateRef.current = state;
     if (!userId || !window.supaPush) return;
     if (!hydrated.current) return;
+    pending.current = state;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      window.supaPush(userId, state).catch(e => console.warn("[sync] push failed:", e.message || e));
-    }, 800);
-    return () => clearTimeout(saveTimer.current);
-  }, [state, userId]);
+    saveTimer.current = setTimeout(flush, 800);
+  }, [state, userId, flush]);
 
   return { state, dispatch, pulls };
 }
