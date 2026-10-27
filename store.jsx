@@ -188,6 +188,13 @@ function movedHabitAction(state, A) {
       const day = pinned(A, "day", () => A.day === "today" ? weekdayIdx(todayISO()) : A.day);
       return { ...A, type: "TOGGLE_HABIT_DATE", id, dateISO: addDaysISO(week, day) };
     }
+    // a step added to it meanwhile becomes a to-do on the habit's card (a
+    // habit shows no steps); ADD_TASK draws the same id the step would have
+    case "ADD_SUB": {
+      const h = state.habits.find(x => x.id === id);
+      return state.projects.some(p => p.id === h.projectId)
+        ? { ...A, type: "ADD_TASK", projectId: h.projectId, lane: "active", taskType: "todo" } : null;
+    }
     case "EDIT_TASK_TEXT": return { ...A, type: "EDIT_HABIT_TEXT", id };
     case "EDIT_TASK_NOTE": return { ...A, type: "EDIT_HABIT_NOTE", id };
     case "DELETE_TASK":    return { ...A, type: "DELETE_HABIT", id };

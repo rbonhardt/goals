@@ -517,6 +517,20 @@ test("a task made a habit keeps its note and its start date, even replayed after
   assert.equal(h.startISO, start);
 });
 
+test("a step B adds to a task A just moved to Habits becomes a to-do on that card", async () => {
+  const { srv, A, B } = await twoDevices();
+  const t = taskByText(A.state(), "Reply to Diego");
+  A.dispatch({ type: "SET_TASK_TYPE", taskId: t.id, kind: "habit" });
+  B.dispatch({ type: "ADD_SUB", taskId: t.id, text: "step from B" });
+  await A.flush(); await B.flush();
+  const s = srv.read();
+  assert.equal(taskById(s, t.id), undefined, "the task moved");
+  const todo = taskByText(s, "step from B");
+  assert.ok(todo, "the step was kept");
+  assert.equal(todo.projectId, t.projectId);
+  assert.equal(tasks(s).filter(x => x.text === "step from B").length, 1);
+});
+
 test("a habit archived mid-week still shows its days in the close-week recap", async () => {
   const { srv, A } = await twoDevices();
   const h = habitById(A.state(), "habit-breath");
