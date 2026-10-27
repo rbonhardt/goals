@@ -724,3 +724,13 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
   .today-text { font-size: 16px; }
   .today-row:not(.today-top) .today-text { font-size: 14.5px; }
 }
+
+/* Keep the Health Log link visible alongside Journal on narrow screens. */
+@media (max-width: 880px) {
+  .appbar { flex-wrap: wrap; gap: 12px; }
+  .appbar-r { flex-wrap: wrap; gap: 8px; }
+}
+@media (max-width: 560px) {
+  .appbar-r { width: 100%; }
+  .appbar-r .btn-journal, .appbar-r .btn-close-week { padding: 8px 12px; }
+}

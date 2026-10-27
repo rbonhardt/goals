@@ -115,6 +115,7 @@ function App({ session }) {
             <span className="appbar-prog-label">{prog.done}/{prog.total}</span>
           </div>
           <button className="btn-journal" onClick={() => setOverlay("journal")}>Journal</button>
+          <a className="btn-journal" href="https://ryan-health.rbonhardt.chatgpt.site/" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Health Log ↗</a>
           <button className="btn-close-week" onClick={() => setOverlay("close")}>Close week →</button>
           <button className="btn-journal" title={session?.user?.email || "Sign out"} onClick={signOut}>Sign out</button>
         </div>
