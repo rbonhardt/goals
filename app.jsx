@@ -134,6 +134,8 @@ function App({ session }) {
 
         <window.Scheduled />
 
+        <window.Habits />
+
         <window.MeetingInbox />
 
         <div className="projects">

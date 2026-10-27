@@ -129,6 +129,75 @@ function defaultScheduled() {
   ];
 }
 
+// ---- habits: their own card, each with a dated log ----
+// A habit is { id, text, projectId, startISO, log: { "YYYY-MM-DD": true },
+// archived, archivedOn }. The project only lends it a tag and a color.
+//
+// The starting set, added once when the list first appears. Fixed ids, so
+// two devices that both add it agree instead of doubling up.
+function defaultHabits(s) {
+  const personal = s.projects.find(p => /personal/i.test(p.name));
+  const start = todayISO();
+  return [
+    { id: "habit-breath", text: "Meditation / breath work" },
+    { id: "habit-mahali", text: "Fill out Mahali form" },
+  ].map(h => ({ ...h, note: "", projectId: personal ? personal.id : null, startISO: start, log: {}, archived: false, archivedOn: null }));
+}
+// Habits used to be project tasks with a week of day-marks that reset on
+// close-week. Any such task moves out to the habits list, keeping its id,
+// its project, its note and this week's marks (that week is all the history
+// it had). Runs on load, on every pull and after every action — so a task
+// made a habit, or one a tab on the old code adds, moves out on the next
+// pass. A task linked to the Employee Hub stays where it is: the Hub owns it.
+//
+// `at` pins the dates a lift uses. On load and pull (no `at`) the marks
+// belong to the app week and the habit starts that week. After an action
+// both come pinned to the action (see reducer), so a replay on a copy where
+// the week has since closed makes the same habit; a task made a habit then
+// starts the day it was made (or on its earliest mark).
+function liftHabits(state, at) {
+  const lifts = (t) => t.type === "habit" && !t.hub;
+  if (!state.projects.some(p => p.tasks.some(lifts))) return state;
+  const habits = (state.habits || []).slice();
+  const projects = state.projects.map(p => {
+    if (!p.tasks.some(lifts)) return p;
+    p.tasks.filter(lifts).forEach(t => {
+      if (habits.some(h => h.id === t.id)) return;
+      const week = at ? at.week() : state.week.startISO;
+      const log = {};
+      (t.days || []).forEach((on, i) => { if (on) log[addDaysISO(week, i)] = true; });
+      const first = Object.keys(log).sort()[0];
+      const start = !at ? week : first && first < at.start() ? first : at.start();
+      habits.push({ id: t.id, text: t.text, note: t.note || "", projectId: p.id, startISO: start, log, archived: false, archivedOn: null,
+        // steps never showed on a habit; kept, so nothing is lost
+        ...(t.subtasks && t.subtasks.length ? { subtasks: t.subtasks } : {}) });
+    });
+    return { ...p, tasks: p.tasks.filter(t => !lifts(t)) };
+  });
+  return { ...state, projects, habits };
+}
+// An action made on a task before it moved to the Habits card (pending on a
+// device across the update), played on a copy where it has moved: it lands
+// on the habit instead of doing nothing. Its pins carry over ({ ...A }).
+function movedHabitAction(state, A) {
+  const id = A.taskId;
+  if (!id || !(state.habits || []).some(h => h.id === id) || findTask(state, id).task) return null;
+  switch (A.type) {
+    case "TOGGLE_HABIT_DAY": {
+      const week = pinned(A, "week", () => state.week.startISO);
+      const day = pinned(A, "day", () => A.day === "today" ? weekdayIdx(todayISO()) : A.day);
+      return { ...A, type: "TOGGLE_HABIT_DATE", id, dateISO: addDaysISO(week, day) };
+    }
+    case "EDIT_TASK_TEXT": return { ...A, type: "EDIT_HABIT_TEXT", id };
+    case "EDIT_TASK_NOTE": return { ...A, type: "EDIT_HABIT_NOTE", id };
+    case "DELETE_TASK":    return { ...A, type: "DELETE_HABIT", id };
+    default: return null;
+  }
+}
+function mapHabit(state, id, fn) {
+  return { ...state, habits: (state.habits || []).map(h => h.id === id ? fn(h) : h) };
+}
+
 // ---- seed (from the user's Notion "Focus" doc) ----
 function seed() {
   const startISO = "2026-05-25";
@@ -244,6 +313,20 @@ function migrate(s, { keepBlank = false } = {}) {
     if (plan && t.type !== "habit" && t.status !== "done")
       s.plans[plan] = [...(Array.isArray(s.plans[plan]) ? s.plans[plan] : []), { taskId: t.id, subId: null }];
   }));
+  // habits card added later: habit tasks move out of their projects (see
+  // liftHabits); a list that never existed then gets the starting set
+  const fresh = !Array.isArray(s.habits);
+  if (fresh) s.habits = [];
+  s.habits.forEach(h => {
+    if (!h.log || typeof h.log !== "object" || Array.isArray(h.log)) h.log = {};
+    if (!cleanDue(h.startISO)) h.startISO = todayISO();
+    if (typeof h.note !== "string") h.note = "";
+    if (h.projectId === undefined) h.projectId = null;
+    if (h.archived === undefined) h.archived = false;
+    if (h.archivedOn === undefined) h.archivedOn = null;
+  });
+  s = liftHabits(s);
+  if (fresh) s.habits = [...s.habits, ...defaultHabits(s).filter(d => !s.habits.some(h => h.id === d.id))];
   // load and every server pull come through here: roll the day over on fresh data
   return rollDay(sinkDone(s));
 }
@@ -561,7 +644,8 @@ function findTask(state, taskId) {
 function reducer(state, action) {
   const timer = action.type === "DUE_TICK";
   const base = action.type === "HYDRATE" || timer ? state : rollDay(state);
-  const next = sinkDone(applyAction(base, action));
+  const lifting = { week: () => pinned(action, "liftWeek", () => base.week.startISO), start: () => pinned(action, "liftStart", todayISO) };
+  const next = sinkDone(liftHabits(applyAction(base, action), lifting));
   if (action.type === "HYDRATE") return rollDay(next);
   return action.type === "HUB_SYNC" ? next : withHubOutbox(state, next, action);
 }
@@ -661,6 +745,8 @@ function withHubOutbox(prev, next, A) {
 
 function applyAction(state, action) {
   const A = action;
+  const moved = movedHabitAction(state, A);
+  if (moved) return applyAction(state, moved);
   switch (A.type) {
     case "RESET_ALL": return seed();
     case "HYDRATE": return A.state;
@@ -1266,6 +1352,34 @@ function applyAction(state, action) {
     case "DELETE_SCHEDULED":
       return { ...state, scheduled: state.scheduled.filter(it => it.id !== A.id) };
 
+    // ---- habits (their own card — see liftHabits) ----
+    case "ADD_HABIT": {
+      const id = uid();
+      if ((state.habits || []).some(h => h.id === id)) return state;   // played twice
+      return { ...state, habits: [...(state.habits || []), {
+        id, text: A.text, note: "", projectId: A.projectId || null,
+        startISO: pinned(A, "start", todayISO), log: {}, archived: false, archivedOn: null,
+      }] };
+    }
+    case "TOGGLE_HABIT_DATE":
+      return mapHabit(state, A.id, (h) => {
+        const on = pinned(A, "on", () => !h.log[A.dateISO]);
+        const log = { ...h.log };
+        if (on) log[A.dateISO] = true; else delete log[A.dateISO];
+        // checking a day before the start moves the start back to it
+        return { ...h, log, startISO: on && A.dateISO < h.startISO ? A.dateISO : h.startISO };
+      });
+    case "EDIT_HABIT_TEXT":
+      return mapHabit(state, A.id, (h) => ({ ...h, text: A.text }));
+    case "EDIT_HABIT_NOTE":
+      return mapHabit(state, A.id, (h) => ({ ...h, note: A.note }));
+    case "SET_HABIT_PROJECT":
+      return mapHabit(state, A.id, (h) => ({ ...h, projectId: A.projectId || null }));
+    case "ARCHIVE_HABIT":
+      return mapHabit(state, A.id, (h) => ({ ...h, archived: !!A.archived, archivedOn: A.archived ? pinned(A, "date", todayISO) : null }));
+    case "DELETE_HABIT":
+      return { ...state, habits: (state.habits || []).filter(h => h.id !== A.id) };
+
     // ---- close the week ----
     case "CLOSE_WEEK": {
       // closes the week it was clicked on, once: played again on a copy
@@ -1283,6 +1397,7 @@ function applyAction(state, action) {
         }
       }));
       selSchedCompletedForWeek(state).forEach(c => completed.push(c));
+      selHabitWeek(state).forEach(c => completed.push(c));
       const entry = { n: state.week.n, range: fmtRange(state.week.startISO), completed, journal: A.journal || "", savedAt: Date.now() };
       // Carry-forward rules for the new week:
       //  • recurring habit → keep it, reset day-marks + status
@@ -1747,6 +1862,20 @@ function selSchedCompletedForWeek(state) {
                || (it.cadence === "monthly" && it.doneAt && it.doneAt >= start && it.doneAt < end))
     .map(it => ({ project: "Scheduled", accent: "oklch(0.640 0.100 75)", text: it.text }));
 }
+// habits checked during the current app-week (close-week recap), as
+// "Hyrox training (4/7 days)" under the habit's project — one archived
+// mid-week included, since its days still happened
+function selHabitWeek(state) {
+  const start = state.week.startISO;
+  const out = [];
+  (state.habits || []).forEach(h => {
+    const n = [0, 1, 2, 3, 4, 5, 6].filter(i => h.log[addDaysISO(start, i)]).length;
+    if (!n) return;
+    const p = state.projects.find(x => x.id === h.projectId);
+    out.push({ project: p ? p.name : "Habits", accent: p ? p.accent : "oklch(0.62 0.018 65)", text: `${h.text} (${n}/7 days)` });
+  });
+  return out;
+}
 // The Today list, resolved to live rows. Anything that no longer exists is
 // skipped (the day roll prunes it from state on the next action).
 function selToday(state) {
@@ -1791,4 +1920,4 @@ function selProgress(state) {
   return { done, total };
 }
 
-Object.assign(window, { setHubInflight, FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selToday, selDay, selTodayKeys, selPlanDay, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS, monthKey });
+Object.assign(window, { setHubInflight, FocusProvider, useFocusStore, fmtRange, addDaysISO, selBigThree, selActive, selQueue, selProgress, selSchedCompletedForWeek, selHabitWeek, selToday, selDay, selTodayKeys, selPlanDay, todayKey, weekdayIdx, uid, quarterIsDue, quarterEndDate, todayISO, daysUntil, DUE_LEAD_DAYS, monthKey });

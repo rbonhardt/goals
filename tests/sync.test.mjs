@@ -104,6 +104,9 @@ const tasks = (s) => s.projects.flatMap(p => p.tasks.map(t => ({ ...t, projectId
 const taskByText = (s, text) => tasks(s).find(t => t.text === text);
 const taskById = (s, id) => tasks(s).find(t => t.id === id);
 const idCount = (s, id) => tasks(s).filter(t => t.id === id).length;
+const habitByText = (s, text) => (s.habits || []).find(h => h.text === text);
+const habitById = (s, id) => (s.habits || []).find(h => h.id === id);
+const selBig = (s, dev) => vm.runInContext("selBigThree", dev.ctx)(s);
 const hubCount = (s, hubId) => tasks(s).filter(t => t.hub && t.hub.id === hubId).length;
 // sandbox arrays have their own Array.prototype, so compare them as JSON
 const sameList = (a, b, msg) => assert.equal(JSON.stringify(a), JSON.stringify(b), msg);
@@ -189,13 +192,10 @@ test("both devices check the same step: it stays checked (toggles are pinned)", 
   const sub = taskById(B.state(), t.id).subtasks[0];
   A.dispatch({ type: "TOGGLE_SUB", taskId: t.id, subId: sub.id });
   B.dispatch({ type: "TOGGLE_SUB", taskId: t.id, subId: sub.id });
-  const habit = taskByText(A.state(), "Arketa — 1 hr/day");
-  A.dispatch({ type: "TOGGLE_HABIT_DAY", taskId: habit.id, day: 0 });
-  B.dispatch({ type: "TOGGLE_HABIT_DAY", taskId: habit.id, day: 0 });
   await A.flush(); await B.flush();
   const s = srv.read();
   assert.equal(taskById(s, t.id).subtasks[0].done, true);
-  assert.equal(taskById(s, habit.id).days[0], true);
+  // (habit days: see "both devices check the same habit day")
 });
 
 test("both devices close the week: it closes once", async () => {
@@ -415,19 +415,133 @@ test("first save to an empty server includes a closed tab's actions the cache la
   assert.ok(taskById(srv.read(), "fromX"));
 });
 
-test("a habit day or recurring check-off made last week stays out of the new week", async () => {
+test("a recurring check-off made last week stays out of the new week; a habit's dated check stays put", async () => {
   const { srv, A, B } = await twoDevices();
-  const habit = taskByText(B.state(), "Hold AM/PM routine all 7 days");
+  const habit = habitByText(B.state(), "Hold AM/PM routine all 7 days");
   const rec = taskByText(B.state(), "Reply to Diego");
   B.dispatch({ type: "TOGGLE_RECURRING", taskId: rec.id });
   await B.flush(); await A.pull();
-  B.dispatch({ type: "TOGGLE_HABIT_DAY", taskId: habit.id, day: 5 });
+  const day = "2026-05-30";
+  B.dispatch({ type: "TOGGLE_HABIT_DATE", id: habit.id, dateISO: day });
   B.dispatch({ type: "SET_STATUS", taskId: rec.id, status: "done" });
   A.dispatch({ type: "CLOSE_WEEK", journal: "" });
   await A.flush(); await B.flush();
   const s = srv.read();
-  assert.equal(taskById(s, habit.id).days.filter(Boolean).length, 0);
+  assert.equal(habitById(s, habit.id).log[day], true, "the check keeps its date across the close");
   assert.equal(taskById(s, rec.id).status, "todo");
+});
+
+// ---- habits ----
+test("habit tasks move out to the Habits card with their marks; the starting set is added", async () => {
+  const srv = makeServer();
+  const A = makeDevice("A", srv);
+  const s = A.state();
+  assert.equal(tasks(s).filter(t => t.type === "habit").length, 0, "no habit is left in a project");
+  const arketa = habitByText(s, "Arketa — 1 hr/day");
+  assert.equal(arketa.projectId, "motion", "it keeps its project as its tag");
+  assert.equal(arketa.startISO, "2026-05-25", "it starts on the week its marks came from");
+  sameList(Object.keys(arketa.log).sort(), ["2026-05-26", "2026-05-27", "2026-05-28"]);
+  sameList(s.habits.map(h => h.id).filter(id => id.startsWith("habit-")), ["habit-breath", "habit-mahali"]);
+  assert.equal(selBig(s, A).filter(Boolean).length, 2, "the habit in the Big Three leaves it");
+});
+
+test("two devices that both moved the habits out agree: one copy of each", async () => {
+  const { srv, A, B } = await twoDevices();
+  B.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(B.state(), "Reply to Diego").id, note: "B" });
+  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: taskByText(A.state(), "Reply to Diego").id, note: "A" });
+  await A.flush(); await B.flush(); await A.pull();
+  const s = srv.read();
+  const ids = s.habits.map(h => h.id);
+  assert.equal(new Set(ids).size, ids.length, "no habit twice");
+  assert.equal(ids.length, 4);
+  sameList(A.state().habits.map(h => h.id), ids);
+});
+
+test("a task made a habit, or one an old tab wrote into a project, moves to the Habits card", async () => {
+  const { srv, A, B } = await twoDevices();
+  const t = taskByText(A.state(), "Reply to Diego");
+  A.dispatch({ type: "SET_TASK_TYPE", taskId: t.id, kind: "habit" });
+  assert.equal(taskById(A.state(), t.id), undefined);
+  assert.equal(habitById(A.state(), t.id).projectId, t.projectId);
+  await A.flush();
+  // a tab on the old code put a habit task back into a project
+  const s0 = srv.read();
+  s0.projects[0].tasks.push({ id: "oldhabit", text: "Old-tab habit", type: "habit", status: "todo", lane: "active", subtasks: [], days: [true, false, false, false, false, false, false], target: 5, recurring: true });
+  srv.json = JSON.stringify(s0); srv.rev++;
+  await B.pull();
+  assert.equal(taskById(B.state(), "oldhabit"), undefined);
+  assert.equal(habitById(B.state(), "oldhabit").projectId, s0.projects[0].id);
+  assert.equal(habitById(B.state(), t.id).projectId, t.projectId, "B sees A's move");
+});
+
+test("both devices check the same habit day: it stays checked; archive and a check both land", async () => {
+  const { srv, A, B } = await twoDevices();
+  const h = A.state().habits[0];
+  A.dispatch({ type: "TOGGLE_HABIT_DATE", id: h.id, dateISO: "2026-10-01" });
+  B.dispatch({ type: "TOGGLE_HABIT_DATE", id: h.id, dateISO: "2026-10-01" });
+  B.dispatch({ type: "TOGGLE_HABIT_DATE", id: h.id, dateISO: "2026-10-02" });
+  A.dispatch({ type: "ARCHIVE_HABIT", id: h.id, archived: true });
+  await A.flush(); await B.flush();
+  const s = habitById(srv.read(), h.id);
+  assert.equal(s.log["2026-10-01"], true);
+  assert.equal(s.log["2026-10-02"], true);
+  assert.equal(s.archived, true);
+  assert.equal(s.startISO <= "2026-10-01", true, "checking a day before the start moves the start back");
+});
+
+test("an old-style habit check, text edit or delete still lands after the habit moved", async () => {
+  const { srv, A } = await twoDevices();
+  const h1 = habitById(A.state(), "habit-breath"), h2 = habitById(A.state(), "habit-mahali");
+  const week = A.state().week.startISO;
+  A.dispatch({ type: "TOGGLE_HABIT_DAY", taskId: h1.id, day: 2 });
+  A.dispatch({ type: "EDIT_TASK_TEXT", taskId: h1.id, text: "renamed the old way" });
+  A.dispatch({ type: "DELETE_TASK", taskId: h2.id });
+  await A.flush();
+  const s = srv.read();
+  assert.equal(habitById(s, h1.id).log[vm.runInContext(`addDaysISO("${week}", 2)`, A.ctx)], true);
+  assert.equal(habitById(s, h1.id).text, "renamed the old way");
+  assert.equal(habitById(s, h2.id), undefined);
+});
+
+test("a task made a habit keeps its note and its start date, even replayed after the week closed", async () => {
+  const { srv, A, B } = await twoDevices();
+  const t = taskByText(A.state(), "Reply to Diego");
+  A.dispatch({ type: "EDIT_TASK_NOTE", taskId: t.id, note: "keep me" });
+  A.dispatch({ type: "SET_TASK_TYPE", taskId: t.id, kind: "habit" });
+  const start = habitById(A.state(), t.id).startISO;
+  assert.equal(start, vm.runInContext("todayISO()", A.ctx), "a converted task starts today");
+  B.dispatch({ type: "CLOSE_WEEK", journal: "" });
+  await B.flush(); await A.flush();   // A's save is turned down; its actions replay on B's closed week
+  const h = habitById(srv.read(), t.id);
+  assert.equal(h.note, "keep me");
+  assert.equal(h.startISO, start);
+});
+
+test("a habit archived mid-week still shows its days in the close-week recap", async () => {
+  const { srv, A } = await twoDevices();
+  const h = habitById(A.state(), "habit-breath");
+  const week = A.state().week.startISO;
+  A.dispatch({ type: "TOGGLE_HABIT_DATE", id: h.id, dateISO: week });
+  A.dispatch({ type: "ARCHIVE_HABIT", id: h.id, archived: true });
+  A.dispatch({ type: "CLOSE_WEEK", journal: "" });
+  await A.flush();
+  assert.ok(srv.read().history[0].completed.some(c => c.text === h.text + " (1/7 days)"));
+});
+
+test("a habit added twice (its _sync note gone) is one habit; close-week lists the habit's days", async () => {
+  const { srv, A } = await twoDevices();
+  A.dispatch({ type: "ADD_HABIT", text: "habit once", projectId: "self" });
+  A.net.loseAnswer = true;
+  await A.flush();
+  const s0 = srv.read(); s0._sync = {}; srv.json = JSON.stringify(s0); srv.rev++;
+  const h = habitByText(A.state(), "habit once");
+  const week = A.state().week.startISO;
+  A.dispatch({ type: "TOGGLE_HABIT_DATE", id: h.id, dateISO: vm.runInContext(`addDaysISO("${week}", 1)`, A.ctx) });
+  A.dispatch({ type: "CLOSE_WEEK", journal: "" });
+  await A.flush();
+  const s = srv.read();
+  assert.equal(s.habits.filter(x => x.text === "habit once").length, 1);
+  assert.ok(s.history[0].completed.some(c => c.text === "habit once (1/7 days)" && c.project === "Self"));
 });
 
 test("an add played twice (its _sync note gone) still makes one copy", async () => {

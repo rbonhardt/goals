@@ -403,7 +403,11 @@ function TaskRow({ task, project, lane, openNoteForId, onNoteOpened, dropMode })
             {menuOpen && (
               <div className="menu-pop open">
                 {!task.note && !showNote && <button onClick={() => { setShowNote(true); closeMenu(); }}>Add note</button>}
-                <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : "Make a habit"}</button>
+                {/* a habit moves up to the Habits card (store's liftHabits),
+                    where steps don't show — so not a task that has some. A
+                    Hub-linked task stays here, so it keeps the old toggle */}
+                {(isHabit || task.hub || task.subtasks.length === 0) &&
+                  <button onClick={() => { dispatch({ type: "SET_TASK_TYPE", taskId: task.id, kind: isHabit ? "todo" : "habit" }); closeMenu(); }}>{isHabit ? "Make a to-do" : task.hub ? "Make a habit" : "Move to Habits"}</button>}
                 <button onClick={() => { dispatch({ type: "TOGGLE_RECURRING", taskId: task.id }); closeMenu(); }}>{task.recurring ? "Don’t repeat weekly" : "Repeat weekly"}</button>
                 {!isHabit && task.subtasks.length === 0 && <button onClick={() => { dispatch({ type: "ADD_SUB", taskId: task.id, text: "First step" }); setShowSubs(true); closeMenu(); }}>Add steps</button>}
                 {!isHabit && task.status !== "done" && <button onClick={() => { setShowPlan(true); closeMenu(); }}>{planDay ? "Change plan day" : "Plan for a day"}</button>}
