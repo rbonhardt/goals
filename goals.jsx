@@ -20,23 +20,32 @@ function Goals() {
     const n = new Date(y, m, 0).getDate() - Number(today.slice(8, 10));
     left = n === 0 ? "last day" : n + (n === 1 ? " day left" : " days left");
   }
+  // each list folds on its own (per device, like Scheduled)
+  const [qCollapsed, toggleQ] = window.useCollapsePref("focus.ui.goalsQuarterCollapsed");
+  const [mCollapsed, toggleM] = window.useCollapsePref("focus.ui.goalsMonthCollapsed");
+  const caret = (collapsed, toggle) => (
+    <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={toggle}
+      title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
+  );
   return (
     <div className="ns-tile goals-tile">
       <section className="goals-sec">
         <div className="goals-head">
+          {caret(qCollapsed, toggleQ)}
           <span className="eyebrow goals-eyebrow">{q.label} goals{q.range ? " · " + q.range : ""}</span>
           <button className={"ns-q-new" + (due ? " due" : "")}
             title={due ? `${q.label} is complete — recap it & set your next 12 weeks` : "Recap this quarter & set new 12-week goals"}
             onClick={() => window.__openQuarterReview && window.__openQuarterReview()}>↻</button>
         </div>
-        <GoalList scope="quarter" goals={q.goals} />
+        {!qCollapsed && <GoalList scope="quarter" goals={q.goals} />}
       </section>
       <section className="goals-sec">
         <div className="goals-head">
+          {caret(mCollapsed, toggleM)}
           <span className="eyebrow goals-eyebrow">{monthName} goals</span>
           {left && <span className="goals-left">{left}</span>}
         </div>
-        <GoalList scope="month" listKey={state.month.key} goals={state.month.goals} />
+        {!mCollapsed && <GoalList scope="month" listKey={state.month.key} goals={state.month.goals} />}
       </section>
     </div>
   );

@@ -683,10 +683,19 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 .minbox-x { border: none; background: none; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .minbox-x:hover { color: oklch(0.55 0.13 30); background: oklch(0.955 0.030 42); }
 
-/* ---- section collapse caret (Scheduled + Meeting Inbox) ---- */
+/* ---- section collapse caret (every card: Big Three, Today, Goals,
+   Scheduled, Habits, Meeting Inbox, each project) ---- */
 .sec-caret { border: none; background: none; cursor: pointer; color: var(--ink-3); font-size: 12px; line-height: 1; padding: 0 2px; align-self: center; transition: transform .15s, color .15s; }
 .sec-caret.open { transform: rotate(90deg); }
 .sec-caret:hover { color: var(--ink); }
+/* Big Three + Today: the caret sits beside the serif title, level with its first line */
+.tile-headl { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.tile-headl > .sec-caret { align-self: flex-start; margin-top: 8px; }
+/* Goals is an inked tile */
+.goals-head .sec-caret { color: oklch(0.62 0.015 70); }
+.goals-head .sec-caret:hover { color: var(--paper); }
+.pcard.is-collapsed .pcard-head { border-bottom: none; padding-bottom: 8px; }
+.pcard.is-collapsed { padding-bottom: 6px; }
 
 /* ---------------- Today (today.jsx) ---------------- */
 .today { margin: 20px 0 8px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 22px 28px 18px; box-shadow: 0 1px 2px oklch(0.5 0.02 60 / .04); transition: background .15s, outline-color .15s; outline: 1px dashed transparent; }

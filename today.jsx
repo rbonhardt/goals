@@ -37,6 +37,7 @@ function Today() {
   const [tabOver, setTabOver] = React.useState(null);
   const [dragKey, setDragKey] = React.useState(null);
   const ref = React.useRef(null);
+  const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.todayCollapsed");
 
   const doneCount = rows.filter(r => r.done).length;
   const dateLabel = new Date(day + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
@@ -167,15 +168,20 @@ function Today() {
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setDrop(null); setTabOver(null); } }}
       onDrop={onDrop}>
       <div className="today-head">
-        <div>
-          <h2 className="today-title">{isToday ? "Today" : dayName(day, "long")}</h2>
-          <span className="today-sub">{isToday
-            ? dateLabel + " · the top three are the day's big three"
-            : dateLabel + " · moves onto Today that morning"}</span>
+        <div className="tile-headl">
+          <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={toggleCollapsed}
+            title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
+          <div>
+            <h2 className="today-title">{isToday ? "Today" : dayName(day, "long")}</h2>
+            <span className="today-sub">{isToday
+              ? dateLabel + " · the top three are the day's big three"
+              : dateLabel + " · moves onto Today that morning"}</span>
+          </div>
         </div>
         <span className="eyebrow today-count">{isToday ? doneCount + "/" + rows.length + " done" : rows.length + " planned"}</span>
       </div>
 
+      {!collapsed && <>
       <div className="today-tabs" role="tablist" aria-label="Day">
         {tabs.map(iso => {
           const past = iso < today, on = iso === day;
@@ -202,6 +208,7 @@ function Today() {
       <div className="today-list" ref={ref}>
         {items}
       </div>
+      </>}
     </section>
   );
 }

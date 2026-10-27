@@ -759,6 +759,7 @@ function ProjectCard({ project }) {
   const hoverMenu = useHoverMenu(setMenuOpen);
   useClickOutside(menuOpen, hoverMenu, closeMenu);
   useSoloMenu(menuOpen, closeMenu);
+  const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.pcardCollapsed." + project.id);
   // Remember the last task added via the AddRow so Tab/Enter chain can attach
   // subtasks (or further subtasks) to it. Reset to null whenever the project
   // changes from outside the AddRow flow.
@@ -837,7 +838,7 @@ function ProjectCard({ project }) {
   }
 
   return (
-    <div className="pcard" style={{ "--accent": project.accent }}
+    <div className={"pcard" + (collapsed ? " is-collapsed" : "")} style={{ "--accent": project.accent }}
       onDragOver={(e) => { if (window.DRAGCARD && window.DRAGCARD !== project.id) e.preventDefault(); }}
       onDrop={(e) => { if (window.DRAGCARD && window.DRAGCARD !== project.id) {
         e.preventDefault();
@@ -848,6 +849,8 @@ function ProjectCard({ project }) {
         window.DRAGCARD = null;
       }}}>
       <div className="pcard-head" draggable onDragStart={startCardDrag} onDragEnd={() => window.DRAGCARD = null}>
+        <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={(e) => { e.stopPropagation(); toggleCollapsed(); }}
+          title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
         <span className="pcard-swatch" style={{ background: project.accent }} />
         <window.InlineText value={project.name} onCommit={(t) => dispatch({ type: "RENAME_PROJECT", projectId: project.id, name: t })} className="pcard-name" serif placeholder="Project" />
         {hiddenCount > 0 && (
@@ -872,6 +875,7 @@ function ProjectCard({ project }) {
         </div>
       </div>
 
+      {!collapsed && <>
       <Lane project={project} lane="active" tasks={shownActive}
         emptyText={active.length > 0 && !showDone ? "All done — nice" : null}
         openNoteForId={openNoteForId}
@@ -902,6 +906,7 @@ function ProjectCard({ project }) {
           </Lane>
         )}
       </div>
+      </>}
     </div>
   );
 }

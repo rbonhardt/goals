@@ -6,6 +6,7 @@ function BigThree() {
   const big = window.selBigThree(state); // [slot1, slot2, slot3] each task-or-null
   const [dragId, setDragId] = React.useState(null);
   const [overIdx, setOverIdx] = React.useState(null);
+  const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.b3Collapsed");
 
   const filled = big.filter(Boolean);
   const order = filled.map(t => t.id);
@@ -21,14 +22,18 @@ function BigThree() {
   return (
     <div className="b3-tile">
       <div className="b3-head">
-        <div>
-          <h2 className="b3-title">The Big Three</h2>
-          <span className="b3-sub">this week's needle-movers</span>
+        <div className="tile-headl">
+          <button className={"sec-caret" + (collapsed ? "" : " open")} onClick={toggleCollapsed}
+            title={collapsed ? "Expand" : "Collapse"} aria-expanded={!collapsed}>▸</button>
+          <div>
+            <h2 className="b3-title">The Big Three</h2>
+            <span className="b3-sub">this week's needle-movers</span>
+          </div>
         </div>
         <span className="eyebrow b3-count">{filled.length}/3 set</span>
       </div>
 
-      <div className="b3-list">
+      {!collapsed && <div className="b3-list">
         {big.map((t, i) => {
           if (!t) return (
             <div className="b3-row b3-empty" key={"e" + i}>
@@ -61,7 +66,7 @@ function BigThree() {
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
