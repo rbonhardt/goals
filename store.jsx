@@ -1386,6 +1386,26 @@ function applyAction(state, action) {
       return mapHabit(state, A.id, (h) => ({ ...h, archived: !!A.archived, archivedOn: A.archived ? pinned(A, "date", todayISO) : null }));
     case "DELETE_HABIT":
       return { ...state, habits: (state.habits || []).filter(h => h.id !== A.id) };
+    case "MOVE_HABIT": {
+      // drag to re-sort: A.id lands at A.toIndex among the live habits, read
+      // against the rendered list (see moveInList). The order that makes is
+      // pinned, so played again on a newer copy the action sets that same
+      // order instead of moving the habit again. As with REORDER_PROJECTS, a
+      // live habit the order doesn't name (added on another device since)
+      // goes to the end. Archived habits keep their places in between.
+      const all = state.habits || [], live = all.filter(h => !h.archived);
+      const order = pinned(A, "order", () => {
+        const from = live.findIndex(h => h.id === A.id);
+        const out = from < 0 ? null : moveInList(live, from, A.toIndex);
+        return out && out.map(h => h.id);
+      });
+      if (!order) return state;
+      const byId = new Map(live.map(h => [h.id, h])), named = new Set(order);
+      const next = [...order.map(id => byId.get(id)).filter(Boolean), ...live.filter(h => !named.has(h.id))];
+      if (next.every((h, i) => h === live[i])) return state;
+      let k = 0;
+      return { ...state, habits: all.map(h => h.archived ? h : next[k++]) };
+    }
 
     // ---- close the week ----
     case "CLOSE_WEEK": {

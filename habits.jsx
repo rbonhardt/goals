@@ -51,7 +51,8 @@ function HabitRing({ pct, accent }) {
   );
 }
 
-function HabitRow({ habit, days, today }) {
+// A live row drags to re-sort (see Habits); an archived one stays put.
+function HabitRow({ habit, days, today, dragging, drop, onDragStart, onDragEnd }) {
   const { state, dispatch } = window.useFocusStore();
   const [menuOpen, setMenuOpen] = React.useState(false);
   habitClickOutside(menuOpen, () => setMenuOpen(false));
@@ -59,9 +60,15 @@ function HabitRow({ habit, days, today }) {
   const accent = project ? project.accent : "var(--ink-3)";
   const stats = habitStats(habit, today);
   const setProject = (projectId) => { dispatch({ type: "SET_HABIT_PROJECT", id: habit.id, projectId }); setMenuOpen(false); };
+  const live = !habit.archived;
 
   return (
-    <div className={"habit-row" + (habit.archived ? " is-archived" : "")}>
+    <div className={"habit-row" + (live ? "" : " is-archived") + (dragging ? " dragging" : "") + (drop ? " drop-" + drop : "")}
+      data-habit={live ? "" : null} draggable={live}
+      // text dragged out of the name while editing is not a row drag
+      onDragStart={(e) => { if (live && e.target === e.currentTarget) onDragStart(e); }}
+      onDragEnd={live ? onDragEnd : null}>
+      {live && <span className="habit-grip" title="Drag to re-sort">⋮⋮</span>}
       <div className="habit-name">
         <window.InlineText value={habit.text} className="habit-title" placeholder="Habit…"
           onCommit={(t) => { if (t && t.trim()) dispatch({ type: "EDIT_HABIT_TEXT", id: habit.id, text: t.trim() }); }} />
@@ -128,16 +135,83 @@ function HabitRow({ habit, days, today }) {
   );
 }
 
+// Drag a live habit to re-sort it: the top half of a row drops above it, the
+// bottom half below. Below the last row (the add line, archived habits) is
+// the end of the list.
+const HABIT_MIME = "application/x-focus-habit";
 function Habits() {
   const { state, dispatch } = window.useFocusStore();
   const [collapsed, toggleCollapsed] = window.useCollapsePref("focus.ui.habitsCollapsed");
   const [showArchived, setShowArchived] = React.useState(false);
+  // drag : null | the id being dragged; drop : null | { kind: "before" | "after", id }
+  const [drag, setDrag] = React.useState(null);
+  const [drop, setDrop] = React.useState(null);
+  const ref = React.useRef(null);
   const today = window.todayISO();
   const days = Array.from({ length: HABIT_SPAN }, (_, i) => window.addDaysISO(today, i - HABIT_SPAN + 1));
   const all = state.habits || [];
   const live = all.filter(h => !h.archived), archived = all.filter(h => h.archived);
   const doneToday = live.filter(h => h.log[today]).length;
   const allDone = live.length > 0 && doneToday === live.length;
+
+  function startDrag(e, id) {
+    e.stopPropagation();
+    // one kind of drag at a time — a habit can't land on a card, in Today or among goals
+    window.DRAG = { taskId: null }; window.SUBDRAG = null; window.DRAGCARD = null; window.TODAYDRAG = null; window.GOALDRAG = null;
+    window.HABITDRAG = id;
+    setDrag(id);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData(HABIT_MIME, id); } catch (x) {}
+  }
+  function endDrag() { window.HABITDRAG = null; setDrag(null); setDrop(null); }
+
+  // the habit being dragged, if this drag is one (the type check keeps a
+  // stale global from catching some other drag)
+  function incoming(e) {
+    const id = window.HABITDRAG;
+    return id && Array.from(e.dataTransfer.types || []).includes(HABIT_MIME) ? id : null;
+  }
+
+  // { toIndex, line } for MOVE_HABIT and its mark, or null where the habit
+  // already is
+  function computeDrop(e, id) {
+    const els = ref.current ? [...ref.current.querySelectorAll(":scope > [data-habit]")] : [];
+    const from = live.findIndex(h => h.id === id);
+    if (from < 0 || !live.length || els.length !== live.length) return null;
+    let i = 0;
+    while (i < els.length) {
+      const r = els[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) break;
+      i++;
+    }
+    if (i === from || i === from + 1) return null;
+    return i < live.length
+      ? { toIndex: i, line: { kind: "before", id: live[i].id } }
+      : { toIndex: i, line: { kind: "after", id: live[live.length - 1].id } };
+  }
+
+  function onDragOver(e) {
+    const id = incoming(e);
+    if (!id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const at = computeDrop(e, id), m = at && at.line;
+    // dragover fires nonstop — keep the same object so the list doesn't re-render
+    setDrop(p => p && m && p.kind === m.kind && p.id === m.id ? p : m);
+  }
+
+  function onDrop(e) {
+    const id = incoming(e);
+    setDrop(null);
+    if (!id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // recompute from the drop event — the cursor may have moved since the
+    // last dragover
+    const at = computeDrop(e, id);
+    if (at) dispatch({ type: "MOVE_HABIT", id, toIndex: at.toIndex });
+    endDrag();
+  }
 
   return (
     <section className="sched habits">
@@ -153,7 +227,10 @@ function Habits() {
         )}
       </div>
       {!collapsed && (
-        <div className="habit-list">
+        <div className="habit-list" ref={ref}
+          onDragOver={onDragOver}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrop(null); }}
+          onDrop={onDrop}>
           {live.length > 0 && (
             <div className="habit-row habit-headrow" aria-hidden="true">
               <span />
@@ -167,7 +244,13 @@ function Habits() {
               <span /><span />
             </div>
           )}
-          {live.map(h => <HabitRow key={h.id} habit={h} days={days} today={today} />)}
+          {live.map(h => (
+            <HabitRow key={h.id} habit={h} days={days} today={today}
+              dragging={drag === h.id}
+              drop={drop && drop.id === h.id ? drop.kind : null}
+              onDragStart={(e) => startDrag(e, h.id)}
+              onDragEnd={endDrag} />
+          ))}
           <window.AddRow className="habit-add" placeholder="Add a habit…"
             onAdd={(t) => dispatch({ type: "ADD_HABIT", text: t })} />
           {archived.length > 0 && (

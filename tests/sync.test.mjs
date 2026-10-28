@@ -489,6 +489,38 @@ test("both devices check the same habit day: it stays checked; archive and a che
   assert.equal(s.startISO <= "2026-10-01", true, "checking a day before the start moves the start back");
 });
 
+test("a dragged habit lands where dropped, archived ones keep their places, and a replay moves it once", async () => {
+  const { srv, A, B } = await twoDevices();
+  A.dispatch({ type: "ADD_HABIT", text: "h3" });
+  A.dispatch({ type: "ADD_HABIT", text: "h4" });
+  A.dispatch({ type: "ARCHIVE_HABIT", id: "habit-mahali", archived: true });
+  await A.flush(); await B.pull();
+  const h3 = habitByText(A.state(), "h3").id;
+  const ids = A.state().habits.map(h => h.id);
+  const live = A.state().habits.filter(h => !h.archived).map(h => h.id);
+  const slots = ids.map(id => id === "habit-mahali");   // where the archived one sits
+  // the order a drop makes, with the index read as the list showed it
+  const move = (list, id, to) => { const out = list.filter(x => x !== id), from = list.indexOf(id); out.splice(to > from ? to - 1 : to, 0, id); return out; };
+  let want = live;
+  // two moves in the middle, so playing them again would move them again
+  A.dispatch({ type: "MOVE_HABIT", id: want[0], toIndex: 2 }); want = move(want, want[0], 2);
+  A.dispatch({ type: "MOVE_HABIT", id: want[0], toIndex: 3 }); want = move(want, want[0], 3);
+  B.dispatch({ type: "EDIT_HABIT_TEXT", id: h3, text: "h3 from B" });
+  A.net.loseAnswer = true;
+  await A.flush();
+  const s0 = srv.read(); s0._sync = {}; srv.json = JSON.stringify(s0); srv.rev++;   // as if the note had been pruned
+  const last = want[want.length - 1];
+  A.dispatch({ type: "MOVE_HABIT", id: last, toIndex: 0 }); want = move(want, last, 0);   // the bottom one to the top
+  await A.flush(); await B.flush();
+  const s = srv.read();
+  sameList(s.habits.filter(h => !h.archived).map(h => h.id), want);
+  sameList(s.habits.map(h => h.archived), slots, "the archived habit kept its slot");
+  assert.equal(habitById(s, h3).text, "h3 from B");
+  const before = JSON.stringify(A.state().habits);
+  A.dispatch({ type: "MOVE_HABIT", id: "habit-mahali", toIndex: 0 });   // archived: stays put
+  assert.equal(JSON.stringify(A.state().habits), before);
+});
+
 test("an old-style habit check, text edit or delete still lands after the habit moved", async () => {
   const { srv, A } = await twoDevices();
   const h1 = habitById(A.state(), "habit-breath"), h2 = habitById(A.state(), "habit-mahali");

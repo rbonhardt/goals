@@ -607,9 +607,21 @@ textarea.inl-edit { resize: vertical; min-height: 2.4em; }
 
 /* ---- Habits (habits.jsx) ---- */
 .habit-list { display: flex; flex-direction: column; }
-.habit-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) 40px 28px; align-items: center; gap: 16px; padding: 9px 4px; border-top: 1px solid var(--line); }
+.habit-row { position: relative; display: grid; grid-template-columns: 210px minmax(0, 1fr) 40px 28px; align-items: center; gap: 16px; padding: 9px 4px; border-top: 1px solid var(--line); }
 .habit-row:first-child, .habit-headrow + .habit-row { border-top: none; }
 .habit-row.is-archived { opacity: .6; }
+/* drag to re-sort: the grip hangs in the card's left padding; the drop line
+   is clay, like a task's */
+.habit-grip { position: absolute; left: -13px; top: 13px; width: 10px; color: var(--line-2); font-size: 11px; line-height: 1; letter-spacing: -2px; cursor: grab; opacity: 0; transition: opacity .15s; user-select: none; }
+.habit-row:hover .habit-grip { opacity: 1; }
+@media (hover: none) { .habit-grip { opacity: .45; } }
+.habit-row.dragging { opacity: .4; }
+.habit-row.drop-before::before, .habit-row.drop-after::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px;
+  background: var(--clay); border-radius: 2px; z-index: 5; pointer-events: none;
+}
+.habit-row.drop-before::before { top: -1px; }
+.habit-row.drop-after::after { bottom: -1px; }
 .habit-headrow { padding: 0 4px 2px; }
 .habit-name { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .habit-title { display: block; max-width: 100%; font-size: 14px; font-weight: 500; line-height: 1.3; }
